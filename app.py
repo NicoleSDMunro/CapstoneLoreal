@@ -261,8 +261,21 @@ for cls,t,msg in alerts: st.markdown(f'<div class="{cls}"><strong>{t}:</strong> 
 
 st.markdown('<div class="section-title">VARIACAO VS MES ANTERIOR</div>',unsafe_allow_html=True)
 if prev_idx>=0 and prev is not None:
-    atual=pivot.set_index("Mes")[[c for c in ["PV","Producao","Estoque"] if c in pivot]]; anterior=prev[[c for c in ["PV","Producao","Estoque"] if c in prev]]
-    st.dataframe(((atual-anterior)/anterior.replace(0,np.nan)*100).round(1).reset_index(),use_container_width=True)
+    atual=pivot.set_index("Mes")[[c for c in ["PV","Producao","Estoque"] if c in pivot]]
+    anterior=prev[[c for c in ["PV","Producao","Estoque"] if c in prev]]
+    tab=((atual-anterior)/anterior.replace(0,np.nan)*100).round(1).reset_index()
+    st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+    fig_var=go.Figure()
+    for col,color,name in [("PV","#5b9cff","PV"),("Producao","#45c49b","Produção"),("Estoque","#e7895e","Estoque")]:
+        if col in tab:
+            fig_var.add_trace(go.Bar(x=tab["Mes"], y=tab[col], name=name, marker_color=color, hovertemplate=f"{name}: %{{y:.1f}}%<extra></extra>"))
+    fig_var.add_hline(y=0, line_width=1, line_color="#6b7280")
+    fig_var.add_hline(y=10, line_width=1, line_dash="dash", line_color="#facc15")
+    fig_var.add_hline(y=-10, line_width=1, line_dash="dash", line_color="#facc15")
+    fig_var.update_layout(paper_bgcolor="#101010",plot_bgcolor="#101010",font=dict(color="#9ca3af",size=13),height=330,margin=dict(l=30,r=18,t=18,b=35),barmode="group",legend=dict(orientation="h",y=-.25,x=.25,font=dict(size=14,color="#cfd4dc")),xaxis=dict(gridcolor="#202020",zerolinecolor="#202020"),yaxis=dict(title="Variação %",gridcolor="#202020",zerolinecolor="#202020"),hovermode="x unified",hoverlabel=dict(bgcolor="#171717",bordercolor="#2a2a2a",font=dict(color="#f5f5f5",size=13)))
+    st.plotly_chart(fig_var,use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.dataframe(tab,use_container_width=True)
 else:
     st.info("Revisão base: não existe mês anterior para comparar.")
 
