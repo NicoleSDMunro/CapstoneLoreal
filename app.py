@@ -23,17 +23,15 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .product-panel .stSelectbox label { color:#9b9b9b !important; text-transform:uppercase; letter-spacing:1.5px; font-size:13px; font-weight:500; }
 .product-panel [data-baseweb="select"] > div { background:#151515 !important; border:1px solid #333 !important; border-radius:6px !important; color:#fff !important; min-height:40px; }
 .product-panel [data-baseweb="select"] span { color:#fff !important; font-weight:650; }
-.struct-grid { display:grid; grid-template-columns: repeat(5,1fr); border:1px solid #2a2a2a; border-radius:8px; overflow:hidden; margin-bottom:26px; background:#101010; }
-.struct-cell { padding:16px 16px 14px; min-height:96px; border-right:1px solid #2a2a2a; }
+.struct-grid { display:grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border:1px solid #2a2a2a; border-radius:8px; overflow:hidden; margin-bottom:26px; background:#101010; width:100%; }
+.struct-cell { padding:16px 16px 14px; min-height:96px; border-right:1px solid #2a2a2a; box-sizing:border-box; }
 .struct-cell:last-child { border-right:none; }
 .label { color:#666; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; font-weight:500; }
-.value { color:#fff; font-size:18px; font-weight:800; margin-top:7px; }
-.sub { color:#9ca3af; font-size:13px; margin-top:7px; }
+.value { color:#fff; font-size:18px; font-weight:800; margin-top:7px; white-space:nowrap; }
+.sub { color:#9ca3af; font-size:13px; margin-top:7px; white-space:nowrap; }
 .orange { color:#e8a24a; } .red { color:#f05a5f; } .blue { color:#5b9cff; } .green { color:#1ca37e; } .yellow { color:#f4c21f; }
-.tabs { display:flex; gap:26px; border-bottom:1px solid #262626; margin:22px 0 20px; }
-.tab-active, .tab { padding:0 26px 14px 26px; text-transform:uppercase; letter-spacing:2px; font-size:15px; font-weight:800; }
-.tab-active { color:#fff; border-bottom:4px solid #fff; }
-.tab { color:#8a8a8a; }
+.tab-single { border-bottom:1px solid #262626; margin:22px 0 20px; }
+.tab-single span { display:inline-block; padding:0 26px 14px 26px; text-transform:uppercase; letter-spacing:2px; font-size:15px; font-weight:800; color:#fff; border-bottom:4px solid #fff; }
 .review-panel { background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:20px 18px 16px; margin-bottom:14px; }
 .review-title { font-size:20px; font-weight:900; letter-spacing:.3px; margin-bottom:18px; }
 .month-row button { height:36px; border-radius:4px !important; border:1px solid #303030 !important; background:#161616 !important; color:#a6adb8 !important; font-weight:650 !important; padding:0 !important; }
@@ -50,6 +48,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .alert-box { background:linear-gradient(90deg,rgba(239,68,68,.22),rgba(239,68,68,.05)); border-left:6px solid #ef4444; }
 .warn-box { background:linear-gradient(90deg,rgba(250,204,21,.18),rgba(250,204,21,.04)); border-left:6px solid #facc15; }
 .success-box { background:linear-gradient(90deg,rgba(22,163,123,.20),rgba(22,163,123,.04)); border-left:6px solid #16a37b; }
+@media (max-width: 900px) { .struct-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .struct-cell { border-bottom:1px solid #2a2a2a; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -195,7 +194,7 @@ for lab,val,sub,cls in [("ORIGEM",info["Origem"],"","orange"),("LT MAX",f"{lt_se
     st.markdown(f'<div class="struct-cell"><div class="label">{lab}</div><div class="value {cls}">{val}</div><div class="sub">{sub}</div></div>',unsafe_allow_html=True)
 st.markdown('</div>',unsafe_allow_html=True)
 
-st.markdown('<div class="tabs"><div class="tab-active">VISAO POR REVISAO</div><div class="tab">FORECAST ACCURACY (VINTAGE)</div></div>',unsafe_allow_html=True)
+st.markdown('<div class="tab-single"><span>VISAO POR REVISAO</span></div>',unsafe_allow_html=True)
 st.markdown('<div class="review-panel">',unsafe_allow_html=True)
 st.markdown(f'<div class="review-title">REVISAO: <span style="color:var(--accent)">{rev}</span></div>',unsafe_allow_html=True)
 cols=st.columns(len(revisoes)+2,gap="small")
