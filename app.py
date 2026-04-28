@@ -33,6 +33,13 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .value { color:#fff; font-size:18px; font-weight:800; margin-top:7px; white-space:nowrap; }
 .sub { color:#9ca3af; font-size:13px; margin-top:7px; white-space:nowrap; }
 .orange { color:#e8a24a; } .red { color:#f05a5f; } .blue { color:#5b9cff; } .green { color:#1ca37e; } .yellow { color:#f4c21f; }
+.badge { display:inline-block; padding:5px 10px; border-radius:999px; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.8px; margin-top:8px; }
+.badge.green { background:rgba(28,163,126,.14); color:#1ca37e; border:1px solid rgba(28,163,126,.45); }
+.badge.yellow { background:rgba(250,204,21,.13); color:#f4c21f; border:1px solid rgba(250,204,21,.45); }
+.badge.red { background:rgba(240,90,95,.13); color:#f05a5f; border:1px solid rgba(240,90,95,.45); }
+.indicator-card { min-height:128px; background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:18px 16px; }
+.indicator-card:hover { border-color:#3a3a3a; }
+.help { color:#8f8f8f; font-size:12px; margin-top:7px; line-height:1.35; }
 .tab-single { border-bottom:1px solid #262626; margin:22px 0 20px; }
 .tab-single span { display:inline-block; padding:0 26px 14px 26px; text-transform:uppercase; letter-spacing:2px; font-size:15px; font-weight:800; color:#fff; border-bottom:4px solid #fff; }
 .review-panel { background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:20px 18px 16px; margin-bottom:14px; }
@@ -127,11 +134,62 @@ def produto_info(base_df,bom_df,produto,estoque_final):
             vals=pd.to_numeric(bom_df[bom_df[pcol].astype(str).str.upper().str.strip().eq(produto.upper())][ltcol],errors="coerce").dropna()
             if len(vals): info["LTSemanas"]=float(vals.max())
     return info
+def derived_metrics(base_prod, pivot, rev, cobertura_target):
+    # Sprint 3: camada independente de UI para indicadores derivados informativos.
+    pv = pivot.set_index("Mes")["PV"] if "PV" in pivot else pd.Series(dtype=float)
+    estoque = pivot.set_index("Mes")["Estoque"] if "Estoque" in pivot else pd.Series(dtype=float)
+    demanda_diaria = pv.replace(0, np.nan) / 30
+    cobertura_dias_series = estoque / demanda_diaria
+    cobertura_dias = float(cobertura_dias_series.dropna().iloc[-1]) if len(cobertura_dias_series.dropna()) else np.nan
+    cobertura_vs_target = cobertura_dias / cobertura_target if cobertura_target else np.nan
+    if pd.isna(cobertura_vs_target): cobertura_status, cobertura_cls = "n/a", "yellow"
+    elif cobertura_vs_target <= 1: cobertura_status, cobertura_cls = "ok", "green"
+    elif cobertura_vs_target <= 1.25: cobertura_status, cobertura_cls = "atenção", "yellow"
+    else: cobertura_status, cobertura_cls = "alerta", "red"
+
+    real = base_prod[base_prod["RealizadoProxy"]].pivot_table(index="Mes", columns="Variavel", values="Valor", aggfunc="sum")
+    real_pv = real["PV"] if "PV" in real else pd.Series(dtype=float)
+    desvio = ((real_pv - pv) / pv.replace(0, np.nan)).reindex(MESES)
+    desvio_atual = float(desvio.dropna().iloc[-1]) if len(desvio.dropna()) else np.nan
+    meses_criticos = int((desvio < -0.10).sum()) if len(desvio.dropna()) else 0
+    if pd.isna(desvio_atual): severidade, sev_cls = "n/a", "yellow"
+    elif abs(desvio_atual) < .10: severidade, sev_cls = "estável", "green"
+    elif -0.25 <= desvio_atual <= -0.10: severidade, sev_cls = "queda moderada", "yellow"
+    elif desvio_atual < -0.25: severidade, sev_cls = "queda severa", "red"
+    else: severidade, sev_cls = "alta", "green"
+
+    idx = MESES.index(rev) if rev in MESES else 0
+    prev3 = [m for m in MESES[max(0, idx-3):idx] if m in pv.index]
+    next3 = [m for m in MESES[idx+1:idx+4] if m in pv.index]
+    prev_mean = pv.loc[prev3].mean() if prev3 else np.nan
+    next_mean = pv.loc[next3].mean() if next3 else np.nan
+    if pd.isna(prev_mean) or prev_mean == 0 or pd.isna(next_mean): tendencia_demanda, tend_dem_cls = "n/a", "yellow"
+    else:
+        delta = (next_mean - prev_mean) / prev_mean
+        if delta < -0.05: tendencia_demanda, tend_dem_cls = "queda", "red"
+        elif delta > 0.05: tendencia_demanda, tend_dem_cls = "alta", "green"
+        else: tendencia_demanda, tend_dem_cls = "estável", "yellow"
+
+    estoque_valid = estoque.dropna()
+    if len(estoque_valid) >= 2:
+        delta_est = (estoque_valid.iloc[-1] - estoque_valid.iloc[0]) / abs(estoque_valid.iloc[0]) if estoque_valid.iloc[0] != 0 else np.nan
+        if pd.isna(delta_est): tendencia_estoque, tend_est_cls = "n/a", "yellow"
+        elif delta_est > .05: tendencia_estoque, tend_est_cls = "acumulando", "red"
+        elif delta_est < -.05: tendencia_estoque, tend_est_cls = "reduzindo", "green"
+        else: tendencia_estoque, tend_est_cls = "estável", "yellow"
+    else:
+        tendencia_estoque, tend_est_cls = "n/a", "yellow"
+
+    return {"cobertura_dias": cobertura_dias, "cobertura_vs_target": cobertura_vs_target, "cobertura_status": cobertura_status, "cobertura_cls": cobertura_cls, "desvio_demanda": desvio_atual, "severidade_demanda": severidade, "severidade_cls": sev_cls, "meses_criticos": meses_criticos, "tendencia_demanda": tendencia_demanda, "tendencia_demanda_cls": tend_dem_cls, "tendencia_estoque": tendencia_estoque, "tendencia_estoque_cls": tend_est_cls, "desvio_series": desvio, "cobertura_series": cobertura_dias_series}
 def format_num(v):
     v=float(v)
     if abs(v)>=1_000_000: return f"{v/1_000_000:.1f}M"
     if abs(v)>=1000: return f"{v:,.0f}".replace(",",".")
     return f"{v:.0f}"
+def format_pct(v):
+    return "n/a" if pd.isna(v) else f"{v*100:.1f}%"
+def format_days(v):
+    return "n/a" if pd.isna(v) else f"{v:.0f}d"
 def short_num(v):
     v=float(v)
     return f"{v/1_000_000:.1f}M" if abs(v)>=1_000_000 else f"{v/1000:.0f}k" if abs(v)>=1000 else f"{v:.0f}"
@@ -140,6 +198,8 @@ def cor_revisao(rev):
 def metric_card(label,value,delta="",accent=False,danger=False):
     cls="metric-card danger" if danger else "metric-card"; vcls="metric-value accent" if accent else "metric-value"
     st.markdown(f'<div class="{cls}"><div class="metric-label">{label}</div><div class="{vcls}">{value}</div><div class="metric-delta">{delta}</div></div>',unsafe_allow_html=True)
+def indicator_card(label,value,status,cls,help_text):
+    st.markdown(f'<div class="indicator-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div><span class="badge {cls}">{status}</span><div class="help">{help_text}</div></div>', unsafe_allow_html=True)
 def struct_box(label,value,sub,cls,last=False):
     box_cls="struct-box-last" if last else "struct-box"
     st.markdown(f'<div class="{box_cls}"><div class="label">{label}</div><div class="value {cls}">{value}</div><div class="sub">{sub}</div></div>',unsafe_allow_html=True)
@@ -202,6 +262,7 @@ est_final=pivot["Estoque"].dropna().iloc[-1] if "Estoque" in pivot and len(pivot
 info=produto_info(base_df,bom_df,produto,est_final)
 lt_sem=float(pd.to_numeric(info["LTSemanas"],errors="coerce") if pd.notna(info["LTSemanas"]) else 16); lt_dias=int(round(lt_sem*7)); lt_meses=lt_dias/30
 ct_dias=float(pd.to_numeric(info["CoberturaTargetDias"],errors="coerce") if pd.notna(info["CoberturaTargetDias"]) else 75); ct_meses=ct_dias/30; ct_sem=ct_dias/7
+metrics=derived_metrics(base_prod, pivot, rev, ct_dias)
 lt_cls="red" if lt_sem>16 else "orange" if lt_sem>10 else "green"; ct_cls="red" if lt_dias>ct_dias else "green"; dem_cls="red" if "queda" in str(info["Demanda"]).lower() else "green"; est_cls="red" if est_final<0 else ""
 
 st.markdown('<div class="struct-wrapper">',unsafe_allow_html=True)
@@ -210,6 +271,16 @@ items=[("ORIGEM",info["Origem"],"","orange"),("LT MAX",f"{lt_sem:.0f} sem",f"apr
 for i,(lab,val,sub,cls) in enumerate(items):
     with scols[i]: struct_box(lab,val,sub,cls,last=(i==len(items)-1))
 st.markdown('</div>',unsafe_allow_html=True)
+
+st.markdown('<div class="section-title">INDICADORES DERIVADOS - SPRINT 3</div>', unsafe_allow_html=True)
+ind_cols=st.columns(4)
+with ind_cols[0]: indicator_card("Cobertura", format_days(metrics["cobertura_dias"]), metrics["cobertura_status"], metrics["cobertura_cls"], "Estoque / (PV mensal ÷ 30). Indica quantos dias o estoque sustenta a demanda planejada.")
+with ind_cols[1]: indicator_card("Cobertura vs Target", format_pct(metrics["cobertura_vs_target"]), metrics["cobertura_status"], metrics["cobertura_cls"], "Cobertura em dias dividida pelo target da aba Base. Apenas leitura informativa.")
+with ind_cols[2]: indicator_card("Desvio Demanda", format_pct(metrics["desvio_demanda"]), metrics["severidade_demanda"], metrics["severidade_cls"], "(Realizado proxy diagonal T,T - PV planejado) / PV planejado.")
+with ind_cols[3]: indicator_card("Meses Críticos", str(metrics["meses_criticos"]), "desvio < -10%", "red" if metrics["meses_criticos"]>0 else "green", "Quantidade de meses do horizonte com desvio de demanda menor que -10%.")
+ind_cols2=st.columns(2)
+with ind_cols2[0]: indicator_card("Tendência Demanda", metrics["tendencia_demanda"], metrics["tendencia_demanda"], metrics["tendencia_demanda_cls"], "Compara média dos próximos 3 meses com média dos 3 meses anteriores.")
+with ind_cols2[1]: indicator_card("Tendência Estoque", metrics["tendencia_estoque"], metrics["tendencia_estoque"], metrics["tendencia_estoque_cls"], "Compara estoque final do horizonte com estoque inicial do horizonte.")
 
 st.markdown('<div class="tab-single"><span>VISAO POR REVISAO</span></div>',unsafe_allow_html=True)
 st.markdown('<div class="review-panel">',unsafe_allow_html=True)
