@@ -15,6 +15,8 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 [data-testid="stHeader"] { background: transparent; }
 [data-testid="stSidebar"] { background:#0d0d0d; border-right:1px solid #242424; }
 #MainMenu, footer { visibility:hidden; }
+@keyframes fadeSlideIn { from { opacity:0; transform: translateY(14px); filter: blur(2px); } to { opacity:1; transform: translateY(0); filter: blur(0); } }
+.transition-area { animation: fadeSlideIn .45s ease-out both; }
 .hero-title { font-size:34px; line-height:.92; font-weight:900; letter-spacing:-1.5px; text-transform:uppercase; margin-bottom:10px; color:#fff; white-space:nowrap; overflow:hidden; }
 .hero-subtitle { color:#9ca3af; font-size:14px; margin-bottom:18px; }
 .sep { height:1px; background:#202020; margin:18px 0 25px; }
@@ -37,11 +39,12 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .tab-single span { display:inline-block; padding:0 26px 14px 26px; text-transform:uppercase; letter-spacing:2px; font-size:15px; font-weight:800; color:#fff; border-bottom:4px solid #fff; }
 .review-panel { background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:20px 18px 16px; margin-bottom:14px; }
 .review-title { font-size:20px; font-weight:900; letter-spacing:.3px; margin-bottom:18px; }
-.month-row button[kind="secondary"] { height:36px; border-radius:4px !important; border:1px solid #303030 !important; background:#171717 !important; color:#a6adb8 !important; font-weight:650 !important; padding:0 !important; box-shadow:none !important; }
-.month-row button[kind="secondary"] p { color:#a6adb8 !important; }
-.month-row button[kind="secondary"]:hover { background:#222222 !important; border-color:#3a3a3a !important; color:#ffffff !important; }
-.month-row button[kind="primary"] { height:36px; border-radius:4px !important; background: var(--accent) !important; color:#050505 !important; border:1px solid var(--accent) !important; font-weight:800 !important; padding:0 !important; box-shadow:none !important; }
-.month-row button[kind="primary"] p { color:#050505 !important; font-weight:800 !important; }
+.month-row div[data-testid="stButton"] button { height:36px !important; border-radius:4px !important; border:1px solid #303030 !important; background:#171717 !important; color:#a6adb8 !important; font-weight:650 !important; padding:0 !important; box-shadow:none !important; }
+.month-row div[data-testid="stButton"] button p { color:#a6adb8 !important; }
+.month-row div[data-testid="stButton"] button:hover { background:#222222 !important; border-color:#3a3a3a !important; color:#ffffff !important; }
+.month-row div[data-testid="stButton"] button:hover p { color:#ffffff !important; }
+.month-row div[data-testid="stButton"] button[kind="primary"] { background: var(--accent) !important; color:#050505 !important; border-color: var(--accent) !important; font-weight:800 !important; }
+.month-row div[data-testid="stButton"] button[kind="primary"] p { color:#050505 !important; font-weight:800 !important; }
 .metric-card { min-height:112px; background:#101010; border:1px solid #2a2a2a; border-radius:6px; padding:20px 18px; }
 .metric-card.danger { border-top:4px solid #ef4444; }
 .metric-label { color:#5e5e5e; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; font-weight:500; }
@@ -203,7 +206,7 @@ lt_sem=float(pd.to_numeric(info["LTSemanas"],errors="coerce") if pd.notna(info["
 ct_dias=float(pd.to_numeric(info["CoberturaTargetDias"],errors="coerce") if pd.notna(info["CoberturaTargetDias"]) else 75); ct_meses=ct_dias/30; ct_sem=ct_dias/7
 lt_cls="red" if lt_sem>16 else "orange" if lt_sem>10 else "green"; ct_cls="red" if lt_dias>ct_dias else "green"; dem_cls="red" if "queda" in str(info["Demanda"]).lower() else "green"; est_cls="red" if est_final<0 else ""
 
-st.markdown('<div class="struct-wrapper">',unsafe_allow_html=True)
+st.markdown('<div class="struct-wrapper transition-area">',unsafe_allow_html=True)
 scols=st.columns(5, gap="small")
 items=[("ORIGEM",info["Origem"],"","orange"),("LT MAX",f"{lt_sem:.0f} sem",f"aprox {lt_meses:.1f}m - {lt_dias}d",lt_cls),("COB. TARGET",f"{ct_dias:.0f}d",f"aprox {ct_meses:.1f}m - {ct_sem:.1f}sem",ct_cls),("DEMANDA",info["Demanda"],"",dem_cls),("EST. FINAL",format_num(est_final),"ultima rev - jun/26",est_cls)]
 for i,(lab,val,sub,cls) in enumerate(items):
@@ -234,6 +237,7 @@ if prev_idx>=0:
 else:
     prev=None; meses_acima=0; delta_txt="base"
 
+st.markdown('<div class="transition-area">',unsafe_allow_html=True)
 c1,c2,c3,c4=st.columns(4)
 with c1: metric_card("REVISAO",rev,"",accent=True)
 with c2: metric_card("PV TOTAL",short_num(pv_total),delta_txt)
@@ -246,7 +250,7 @@ fig=go.Figure()
 for var,color,dash,name in [("PV","#5b9cff","solid","PV (Sell In)"),("Producao","#45c49b","dash","Producao"),("Estoque","#e7895e","dot","Estoque")]:
     if var in pivot: fig.add_trace(go.Scatter(x=pivot["Mes"],y=pivot[var],mode="lines+markers",name=name,line=dict(width=3,color=color,dash=dash),marker=dict(size=7)))
 if rev in MESES: fig.add_vline(x=rev,line_width=1.5,line_dash="dash",line_color="#6b7280")
-fig.update_layout(paper_bgcolor="#101010",plot_bgcolor="#101010",font=dict(color="#9ca3af",size=13),height=430,margin=dict(l=30,r=18,t=18,b=35),legend=dict(orientation="h",y=-.22,x=.20,font=dict(size=14,color="#cfd4dc")),xaxis=dict(gridcolor="#202020",zerolinecolor="#202020"),yaxis=dict(gridcolor="#202020",zerolinecolor="#202020"))
+fig.update_layout(paper_bgcolor="#101010",plot_bgcolor="#101010",font=dict(color="#9ca3af",size=13),height=430,margin=dict(l=30,r=18,t=18,b=35),legend=dict(orientation="h",y=-.22,x=.20,font=dict(size=14,color="#cfd4dc")),xaxis=dict(gridcolor="#202020",zerolinecolor="#202020"),yaxis=dict(gridcolor="#202020",zerolinecolor="#202020"),transition=dict(duration=450,easing="cubic-in-out"))
 st.plotly_chart(fig,use_container_width=True)
 st.markdown('</div>',unsafe_allow_html=True)
 
@@ -264,5 +268,7 @@ if prev_idx>=0 and prev is not None:
     st.dataframe(((atual-anterior)/anterior.replace(0,np.nan)*100).round(1).reset_index(),use_container_width=True)
 else:
     st.info("Revisão base: não existe mês anterior para comparar.")
+st.markdown('</div>',unsafe_allow_html=True)
+
 with st.expander("Ver dados extraídos"):
     st.dataframe(base_prod,use_container_width=True)
