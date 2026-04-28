@@ -1,0 +1,416 @@
+import { useState, useMemo } from 'react'
+import {
+  LineChart, Line, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, ReferenceLine
+} from 'recharts'
+import { MONTHS, REV, CREV, PRODS, VARS, PI } from './data/produtos'
+import { DMAP } from './data/series'
+
+// ── CORES ─────────────────────────────────────────────────────────────────────
+const BG  = '#000', BGC = '#111', BGI = '#1a1a1a'
+const BD  = '#2a2a2a', BDL = '#333'
+const TX  = '#fff', TXS = '#999', TXM = '#555'
+const RE  = '#E24B4A', AM = '#D4952A', GR = '#2DBD8F'
+const BL  = '#5BA4F5', OR = '#F0885A'
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+const fmt   = n => { if (n == null) return '--'; const a = Math.abs(n); if (a >= 1e6) return (n/1e6).toFixed(1)+'M'; if (a >= 1e3) return Math.round(n/1e3)+'k'; return String(Math.round(n)) }
+const fmtN  = n => { if (n == null) return '--'; return Math.round(n).toLocaleString('pt-BR') }
+const fmtP  = n => { if (n == null) return '--'; return (n >= 0 ? '+' : '') + n.toFixed(1) + '%' }
+const getC  = v => v < 10 ? GR : v < 25 ? AM : RE
+const getL  = v => v < 10 ? 'Bom' : v < 25 ? 'Aceit.' : 'Ruim'
+
+// ── CALCULO VINTAGE ───────────────────────────────────────────────────────────
+function calcVintage(d, sv) {
+  return REV.map((label, ri) => {
+    const pares = []
+    for (let ti = ri + 1; ti < REV.length; ti++) {
+      const prev = d[sv]?.[ri]?.[ti]
+      const apur = d[sv]?.[ti + 1]?.[ti] // linha abaixo na diagonal
+      if (prev == null || apur == null) continue
+      const e  = apur - prev
+      const ep = apur !== 0 ? (e / apur) * 100 : null
+      pares.push({ mesAlvo: REV[ti], prev, apur, e, ep, absPct: ep != null ? Math.abs(ep) : null })
+    }
+    if (!pares.length) return { label, ri, pares: [], mape: null, mae: null, bias: null, maxErr: 0 }
+    const validos = pares.filter(p => p.absPct != null)
+    const mape    = validos.length ? validos.reduce((a, b) => a + b.absPct, 0) / validos.length : null
+    const mae     = pares.reduce((a, b) => a + Math.abs(b.e), 0) / pares.length
+    const bias    = validos.length ? validos.reduce((a, b) => a + (b.ep || 0), 0) / validos.length : null
+    const maxErr  = validos.length ? Math.max(...validos.map(p => p.absPct || 0)) : 0
+    return { label, ri, pares, mape, mae, bias, maxErr }
+  })
+}
+
+// ── APP ───────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [tab,  setTab]  = useState(0)
+  const [sp,   setSp]   = useState('A')
+  const [ri,   setRi]   = useState(0)
+  const [sv,   setSv]   = useState('pv')
+  const [open, setOpen] = useState(null)
+
+  const d     = DMAP[sp]
+  const info  = PI[sp]
+  const lastE = d.est[REV.length - 1]?.[MONTHS.length - 1] ?? 0
+
+  const pvA    = d.pv[ri]
+  const pvP    = ri > 0 ? d.pv[ri - 1] : null
+  const tot    = pvA.reduce((a, b) => a + (b || 0), 0)
+  const prevTot = pvP ? pvP.reduce((a, b) => a + (b || 0), 0) : 0
+  const chg    = pvP ? ((tot - prevTot) / prevTot * 100) : null
+  const mud    = pvP ? pvA.filter((v, i) => pvP[i] && Math.abs(v - pvP[i]) / pvP[i] > 0.1).length : 0
+  const eF     = d.est[ri]?.[MONTHS.length - 1] ?? 0
+
+  const vintage = useMemo(() => calcVintage(d, sv), [sp, sv, d])
+
+  // Insights automaticos
+  const insights = useMemo(() => {
+    const list = []
+    if (eF < 0) list.push({ t: 'r', txt: 'Ruptura projetada: estoque chega a ' + fmtN(eF) + ' un em jun/26. LT de ' + info.l + ' sem exige acao imediata.' })
+    if (info.l * 7 > info.c) list.push({ t: 'r', txt: 'Risco estrutural: LT (' + info.l + ' sem = ' + (info.l * 7) + 'd) maior que Cobertura Target (' + info.c + 'd).' })
+    const zeros = d.prod[ri].slice(0, 9).filter(v => v === 0).length
+    if (zeros >= 5 && pvA[8] - pvA[0] > 0) list.push({ t: 'r', txt: 'Producao zerada em ' + zeros + '/9 meses com PV em alta. Risco de ruptura.' })
+    if (pvP) {
+      const diffs = pvA.slice(0, 9).map((v, i) => pvP[i] ? ((v - pvP[i]) / pvP[i]) * 100 : 0)
+      const avg   = diffs.reduce((a, b) => a + b, 0) / diffs.length
+      if (avg > 10)  list.push({ t: 'a', txt: 'PV revisado +' + avg.toFixed(0) + '% vs anterior. Verificar insumos e producao.' })
+      if (avg < -10) list.push({ t: 'a', txt: 'PV revisado ' + avg.toFixed(0) + '% vs anterior. Avaliar reducao de producao.' })
+      const mv = pvA.filter((v, i) => pvP[i] && Math.abs(v - pvP[i]) / pvP[i] > 0.1).length
+      if (mv === 0) list.push({ t: 'v', txt: 'Forecast estavel: nenhum mes variou mais de 10% vs revisao anterior.' })
+    } else {
+      list.push({ t: 'v', txt: 'Revisao base (' + REV[0] + '): planejamento original antes de qualquer atualizacao.' })
+    }
+    const prodNZ = d.prod[ri].filter(v => v > 0).length
+    if (prodNZ > 0 && prodNZ <= 4) list.push({ t: 'a', txt: 'Producao concentrada em ' + prodNZ + ' meses (padrao de pulsos).' })
+    if (!list.length) list.push({ t: 'v', txt: 'Nenhuma anomalia detectada nesta revisao.' })
+    return list
+  }, [sp, ri, eF, info, pvA, pvP, d])
+
+  // Estilos reutilizaveis
+  const IS  = { fontSize: 12, padding: '5px 9px', borderRadius: 4, border: '0.5px solid ' + BDL, background: BGI, color: TX }
+  const LB  = { fontSize: 9, color: TXS, display: 'block', marginBottom: 3, letterSpacing: '0.08em', textTransform: 'uppercase' }
+  const THS = { padding: '8px 10px', textAlign: 'left', fontWeight: 500, color: TXS, borderBottom: '0.5px solid ' + BD, fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase' }
+  const cfgColor = { r: RE, a: AM, v: GR }
+  const cfgBg    = { r: 'rgba(226,75,74,0.14)', a: 'rgba(212,149,42,0.14)', v: 'rgba(45,189,143,0.14)' }
+
+  return (
+    <div style={{ fontFamily: 'Helvetica Neue,Arial,sans-serif', color: TX, background: BG, minHeight: '100vh', padding: '18px 16px 40px' }}>
+
+      {/* HEADER */}
+      <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: '0.5px solid ' + BD }}>
+        <div style={{ fontSize: 10, letterSpacing: '0.18em', color: TXS, fontWeight: 300, marginBottom: 3 }}>
+          L OREAL BRASIL - SUPPLY CHAIN STRATEGY
+        </div>
+        <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: '0.04em' }}>
+          SMART LAUNCH AND RESPONSIVENESS TO GROWTH
+        </div>
+        <div style={{ fontSize: 10, color: TXS, fontWeight: 300, marginTop: 2 }}>
+          Analise Exploratoria - Produtos A-E - Jun/2025-Jun/2026
+        </div>
+      </div>
+
+      {/* SELETOR PRODUTO */}
+      <div style={{ padding: '8px 12px', background: BGC, borderRadius: 6, marginBottom: 10, border: '0.5px solid ' + BD }}>
+        <label style={LB}>Produto</label>
+        <select value={sp} onChange={e => { setSp(e.target.value); setRi(0); setOpen(null) }} style={{ ...IS, width: '100%' }}>
+          {PRODS.map(p => (
+            <option key={p} value={p}>
+              {'Produto ' + p + ' - ' + PI[p].o + ' - Cob.T ' + PI[p].c + 'd - LT ' + PI[p].l + 'sem - ' + PI[p].d}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* FICHA PRODUTO */}
+      <div style={{ marginBottom: 12, borderRadius: 6, border: '0.5px solid ' + BD, overflow: 'hidden' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)' }}>
+          {[
+            { lb: 'Origem',      v: info.o,       c: info.o === 'Interno' ? '#6AABF7' : '#F0A050' },
+            { lb: 'LT max',      v: info.l + ' sem', sb: 'aprox ' + (info.l / 4.33).toFixed(1) + 'm - ' + (info.l * 7) + 'd', c: info.l > 16 ? RE : info.l > 10 ? AM : GR },
+            { lb: 'Cob. Target', v: info.c + 'd', sb: 'aprox ' + (info.c / 30).toFixed(1) + 'm - ' + (info.c / 7).toFixed(1) + 'sem', c: info.c >= info.l * 7 ? GR : RE },
+            { lb: 'Demanda',     v: info.d,       c: info.d === 'Aumento' ? GR : RE },
+            { lb: 'Est. Final',  v: fmtN(lastE),  sb: 'ultima rev - jun/26', c: lastE < 0 ? RE : TX },
+          ].map((c, i) => (
+            <div key={i} style={{ padding: '8px 10px', background: BGC, borderRight: i < 4 ? '0.5px solid ' + BD : 'none' }}>
+              <div style={{ fontSize: 9, color: TXM, marginBottom: 2, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{c.lb}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: c.c }}>{c.v}</div>
+              {c.sb && <div style={{ fontSize: 9, color: TXS, marginTop: 1 }}>{c.sb}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* TABS */}
+      <div style={{ display: 'flex', marginBottom: 14, borderBottom: '0.5px solid ' + BD }}>
+        {['Visao por Revisao', 'Forecast Accuracy (Vintage)'].map((t, i) => (
+          <button key={i} onClick={() => setTab(i)} style={{ padding: '7px 18px', fontSize: 10, border: 'none', background: 'transparent', cursor: 'pointer', borderBottom: tab === i ? '2px solid #fff' : '2px solid transparent', color: tab === i ? TX : TXS, fontWeight: tab === i ? 600 : 300, letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {/* ══ ABA 0 — VISAO POR REVISAO ══════════════════════════════════════════ */}
+      {tab === 0 && (
+        <div>
+          {/* Seletor revisao */}
+          <div style={{ padding: '10px 12px', background: BGC, borderRadius: 6, marginBottom: 10, border: '0.5px solid ' + BD }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>
+                REVISAO: <span style={{ color: CREV[ri] }}>{REV[ri]}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 5 }}>
+                <button onClick={() => setRi(x => Math.max(0, x - 1))} disabled={ri === 0} style={{ padding: '3px 10px', fontSize: 11, borderRadius: 3, border: '0.5px solid ' + BDL, background: 'transparent', color: TXS, cursor: ri === 0 ? 'not-allowed' : 'pointer' }}>{'<'}</button>
+                <button onClick={() => setRi(x => Math.min(REV.length - 1, x + 1))} disabled={ri === REV.length - 1} style={{ padding: '3px 10px', fontSize: 11, borderRadius: 3, border: '0.5px solid ' + BDL, background: 'transparent', color: TXS, cursor: ri === REV.length - 1 ? 'not-allowed' : 'pointer' }}>{'>'}</button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {REV.map((r, i) => (
+                <div key={i} onClick={() => setRi(i)} style={{ padding: '3px 9px', borderRadius: 2, border: '1px solid ' + (ri === i ? CREV[i] : BD), cursor: 'pointer', background: ri === i ? CREV[i] : BGI, color: ri === i ? '#000' : TXS, fontSize: 10, fontWeight: ri === i ? 700 : 300 }}>
+                  {r}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* KPIs */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 12 }}>
+            {[
+              { lb: 'Revisao',     v: REV[ri],   c: CREV[ri] },
+              { lb: 'PV Total',    v: fmt(tot),  sb: chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(0) + '% vs anterior' : 'base' },
+              { lb: 'Meses >10%',  v: mud + 'm', al: mud > 3 },
+              { lb: 'Est. Final',  v: fmtN(eF),  sb: 'jun/2026', al: eF < 0 },
+            ].map((c, i) => (
+              <div key={i} style={{ background: BGC, borderRadius: 4, padding: '10px 12px', border: '0.5px solid ' + BD, borderTop: '2px solid ' + (c.al ? RE : BD) }}>
+                <div style={{ fontSize: 9, color: TXM, marginBottom: 2, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{c.lb}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: c.al ? RE : (c.c || TX) }}>{c.v}</div>
+                {c.sb && <div style={{ fontSize: 9, color: TXS, marginTop: 1 }}>{c.sb}</div>}
+              </div>
+            ))}
+          </div>
+
+          {/* Grafico */}
+          <div style={{ fontSize: 9, color: TXS, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
+            {'PV - PRODUCAO - ESTOQUE - ' + REV[ri]}
+          </div>
+          <div style={{ background: BGC, borderRadius: 6, padding: '12px 6px 6px', border: '0.5px solid ' + BD, marginBottom: 14 }}>
+            <ResponsiveContainer width="100%" height={250}>
+              <LineChart data={MONTHS.map((m, mi) => ({ m, PV: d.pv[ri][mi], Prod: d.prod[ri][mi], Est: d.est[ri][mi] }))} margin={{ top: 4, right: 14, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
+                <XAxis dataKey="m" tick={{ fontSize: 9, fill: TXS }} tickLine={false} axisLine={{ stroke: BD }} />
+                <YAxis tick={{ fontSize: 9, fill: TXS }} tickLine={false} axisLine={false} tickFormatter={fmt} width={42} />
+                <Tooltip contentStyle={{ background: '#1a1a1a', border: '0.5px solid ' + BD, fontSize: 11, color: TX }} formatter={(v, n) => [fmtN(v), n]} />
+                <Legend wrapperStyle={{ fontSize: 10, color: TXS }} />
+                <ReferenceLine x={REV[ri]} stroke="#555" strokeWidth={1} strokeDasharray="4 2" />
+                <Line type="monotone" dataKey="PV"   stroke={BL} strokeWidth={2} dot={{ r: 2 }} name="PV (Sell In)" />
+                <Line type="monotone" dataKey="Prod" stroke={GR} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 2 }} name="Producao" />
+                <Line type="monotone" dataKey="Est"  stroke={OR} strokeWidth={2} strokeDasharray="2 2" dot={{ r: 2 }} name="Estoque" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Conclusoes */}
+          <div style={{ fontSize: 9, color: TXS, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+            {'Conclusao - Produto ' + sp + ' - ' + REV[ri]}
+          </div>
+          {insights.map((ins, i) => (
+            <div key={i} style={{ display: 'flex', gap: 10, padding: '9px 12px', borderRadius: 4, marginBottom: 6, background: cfgBg[ins.t], borderLeft: '3px solid ' + cfgColor[ins.t] }}>
+              <span style={{ fontSize: 11, color: TX, lineHeight: 1.6 }}>{ins.txt}</span>
+            </div>
+          ))}
+
+          {/* Tabela variacao */}
+          {ri > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 9, color: TXS, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
+                {'Variacao vs ' + REV[ri - 1]}
+              </div>
+              <div style={{ overflowX: 'auto', borderRadius: 4, border: '0.5px solid ' + BD }}>
+                <table style={{ fontSize: 10, borderCollapse: 'collapse', minWidth: 500, width: '100%' }}>
+                  <thead>
+                    <tr style={{ background: BGC }}>
+                      <th style={THS}>Var</th>
+                      {MONTHS.map(m => <th key={m} style={{ ...THS, textAlign: 'right', fontSize: 9 }}>{m}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[{ k: 'pv', lb: 'PV', c: BL }, { k: 'prod', lb: 'PROD', c: GR }, { k: 'est', lb: 'EST', c: OR }].map(row => (
+                      <tr key={row.k} style={{ borderBottom: '0.5px solid ' + BD }}>
+                        <td style={{ padding: '5px 8px', fontWeight: 700, color: row.c, fontSize: 9 }}>{row.lb}</td>
+                        {MONTHS.map((m, mi) => {
+                          const cur = d[row.k][ri]?.[mi]
+                          const prv = d[row.k][ri - 1]?.[mi]
+                          const dv  = (cur != null && prv != null && prv !== 0) ? ((cur - prv) / Math.abs(prv)) * 100 : null
+                          const col = dv == null ? TXM : Math.abs(dv) < 5 ? TXM : dv > 0 ? GR : RE
+                          const bg  = dv && Math.abs(dv) > 25 ? (dv > 0 ? 'rgba(45,189,143,0.1)' : 'rgba(226,75,74,0.1)') : 'transparent'
+                          return <td key={mi} style={{ padding: '5px 4px', textAlign: 'right', fontSize: 9, color: col, fontWeight: dv && Math.abs(dv) > 15 ? 700 : 400, background: bg }}>{dv == null ? '.' : (dv >= 0 ? '+' : '') + dv.toFixed(0) + '%'}</td>
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══ ABA 1 — FORECAST ACCURACY VINTAGE ═════════════════════════════════ */}
+      {tab === 1 && (
+        <div>
+          {/* Controles */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'flex-end', padding: '8px 12px', background: BGC, borderRadius: 6, border: '0.5px solid ' + BD }}>
+            <div>
+              <label style={LB}>Variavel</label>
+              <select value={sv} onChange={e => setSv(e.target.value)} style={IS}>
+                {VARS.map(v => <option key={v.k} value={v.k}>{v.lb}</option>)}
+              </select>
+            </div>
+            <div style={{ fontSize: 10, color: TXS, lineHeight: 1.7 }}>
+              Acuracia por Revisao (Vintage): para cada revisao R, compara toda a linha com o apurado. Clique para expandir.
+            </div>
+          </div>
+
+          <div style={{ padding: '8px 12px', background: 'rgba(91,164,245,0.06)', borderRadius: 4, border: '0.5px solid rgba(91,164,245,0.15)', marginBottom: 12, fontSize: 10, color: TXS, lineHeight: 1.8 }}>
+            <span style={{ color: BL, fontWeight: 600 }}>Previsto (R)</span>{' = RAW[R][T]  '}
+            <span style={{ color: OR, fontWeight: 600 }}>Apurado (proxy)</span>{' = RAW[T+1][T]  '}
+            <span style={{ color: GR }}>Erro+ = Subprevisao</span>{'  '}
+            <span style={{ color: RE }}>Erro- = Sobreprevisao</span>
+          </div>
+
+          {/* Tabela vintage */}
+          <div style={{ fontSize: 9, color: TXS, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
+            Metricas por Revisao - clique para expandir
+          </div>
+          <div style={{ borderRadius: 4, border: '0.5px solid ' + BD, overflow: 'hidden', marginBottom: 14 }}>
+            <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: BGC }}>
+                  {['Revisao (as-of)', 'Janela avaliada', 'MAPE', 'MAE', 'BIAS', 'Pares', 'Status'].map(h => (
+                    <th key={h} style={THS}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {vintage.flatMap(rv => {
+                  if (!rv.pares.length) return []
+                  const ab     = rv.mape || 0
+                  const cor    = getC(ab)
+                  const lbl    = getL(ab)
+                  const isOpen = open === rv.ri
+                  const rows   = []
+
+                  rows.push(
+                    <tr key={'r' + rv.ri} onClick={() => setOpen(isOpen ? null : rv.ri)}
+                      style={{ borderBottom: '0.5px solid ' + BD, background: isOpen ? 'rgba(91,164,245,0.07)' : (rv.ri % 2 === 0 ? BG : BGC), cursor: 'pointer' }}>
+                      <td style={{ padding: '10px 10px', fontWeight: 700, color: BL, fontSize: 12 }}>{(isOpen ? 'v ' : '+ ') + rv.label}</td>
+                      <td style={{ padding: '10px 10px', color: TXS, fontSize: 10 }}>{rv.pares[0].mesAlvo + ' > ' + rv.pares[rv.pares.length - 1].mesAlvo + ' (' + rv.pares.length + 'm)'}</td>
+                      <td style={{ padding: '10px 10px', fontWeight: 700, color: cor, fontSize: 13 }}>{rv.mape != null ? rv.mape.toFixed(1) + '%' : '--'}</td>
+                      <td style={{ padding: '10px 10px', color: TX }}>{rv.mae != null ? fmt(rv.mae) : '--'}</td>
+                      <td style={{ padding: '10px 10px', fontWeight: 600, color: rv.bias != null ? (rv.bias > 0 ? GR : RE) : TXM }}>{rv.bias != null ? fmtP(rv.bias) : '--'}</td>
+                      <td style={{ padding: '10px 10px', color: TXS }}>{rv.pares.length}</td>
+                      <td style={{ padding: '10px 10px' }}><span style={{ fontSize: 10, padding: '3px 8px', borderRadius: 2, background: cor + '20', color: cor, fontWeight: 700 }}>{lbl}</span></td>
+                    </tr>
+                  )
+
+                  if (isOpen) {
+                    rows.push(
+                      <tr key={'d' + rv.ri}>
+                        <td colSpan={7} style={{ padding: 0, background: 'rgba(91,164,245,0.04)' }}>
+                          <div style={{ padding: '10px 12px 0' }}>
+                            <div style={{ fontSize: 9, color: TXS, textTransform: 'uppercase', marginBottom: 4 }}>
+                              {'Previsto (' + rv.label + ') vs Apurado (proxy)'}
+                            </div>
+                            <ResponsiveContainer width="100%" height={150}>
+                              <LineChart data={rv.pares} margin={{ top: 2, right: 14, left: 0, bottom: 2 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
+                                <XAxis dataKey="mesAlvo" tick={{ fontSize: 9, fill: TXS }} tickLine={false} axisLine={{ stroke: BD }} />
+                                <YAxis tick={{ fontSize: 9, fill: TXS }} tickLine={false} axisLine={false} tickFormatter={fmt} width={40} />
+                                <Tooltip contentStyle={{ background: '#1a1a1a', border: '0.5px solid ' + BD, fontSize: 11, color: TX }} formatter={(v, n) => [fmtN(v), n]} />
+                                <Legend wrapperStyle={{ fontSize: 9, color: TXS }} />
+                                <Line type="monotone" dataKey="apur" stroke={OR} strokeWidth={2} dot={{ r: 3, fill: OR }} name="Apurado (proxy)" />
+                                <Line type="monotone" dataKey="prev" stroke={BL} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: BL }} name={'Previsto (' + rv.label + ')'} />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                          <table style={{ width: '100%', fontSize: 10, borderCollapse: 'collapse' }}>
+                            <thead>
+                              <tr style={{ background: 'rgba(0,0,0,0.3)' }}>
+                                {['Mes-alvo', 'Previsto', 'Apurado', 'Erro (un)', 'Erro %', 'Sinal', ''].map((h, i) => (
+                                  <th key={i} style={{ padding: '5px 10px', textAlign: 'left', fontWeight: 500, color: TXM, borderBottom: '0.5px solid ' + BD, fontSize: 9, textTransform: 'uppercase' }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rv.pares.map((p, pi) => {
+                                const ab2   = p.absPct || 0
+                                const isMax = ab2 === rv.maxErr && ab2 > 0
+                                const cor2  = getC(ab2)
+                                return (
+                                  <tr key={pi} style={{ borderBottom: '0.5px solid rgba(42,42,42,0.5)', background: isMax ? 'rgba(226,75,74,0.07)' : 'transparent' }}>
+                                    <td style={{ padding: '6px 10px', fontWeight: 600, color: TX }}>{p.mesAlvo}</td>
+                                    <td style={{ padding: '6px 10px', color: BL }}>{fmtN(p.prev)}</td>
+                                    <td style={{ padding: '6px 10px', color: OR }}>{fmtN(p.apur)}</td>
+                                    <td style={{ padding: '6px 10px', color: p.e >= 0 ? GR : RE, fontWeight: 600 }}>{(p.e >= 0 ? '+' : '') + fmtN(p.e)}</td>
+                                    <td style={{ padding: '6px 10px', color: p.ep != null ? (p.ep >= 0 ? GR : RE) : TXM, fontWeight: 600 }}>{p.ep != null ? fmtP(p.ep) : '--'}</td>
+                                    <td style={{ padding: '6px 10px' }}><span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 2, background: cor2 + '15', color: cor2 }}>{p.e >= 0 ? 'Sub' : 'Sobre'}</span></td>
+                                    <td style={{ padding: '6px 10px' }}>{isMax && <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 2, background: 'rgba(226,75,74,0.2)', color: RE, fontWeight: 700 }}>maior erro</span>}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )
+                  }
+                  return rows
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* MAPE por revisao */}
+          <div style={{ fontSize: 9, color: TXS, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 5 }}>MAPE por revisao</div>
+          <div style={{ background: BGC, borderRadius: 6, padding: '12px 6px 6px', border: '0.5px solid ' + BD, marginBottom: 12 }}>
+            <ResponsiveContainer width="100%" height={140}>
+              <LineChart data={vintage.filter(r => r.mape != null)} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
+                <XAxis dataKey="label" tick={{ fontSize: 9, fill: TXS }} tickLine={false} axisLine={{ stroke: BD }} />
+                <YAxis tick={{ fontSize: 9, fill: TXS }} tickLine={false} axisLine={false} tickFormatter={v => v.toFixed(0) + '%'} width={36} />
+                <Tooltip formatter={v => [v.toFixed(1) + '%', 'MAPE']} contentStyle={{ background: '#1a1a1a', border: '0.5px solid ' + BD, fontSize: 11, color: TX }} />
+                <ReferenceLine y={10} stroke={GR} strokeDasharray="3 2" opacity={0.4} />
+                <ReferenceLine y={25} stroke={AM} strokeDasharray="3 2" opacity={0.4} />
+                <Line type="monotone" dataKey="mape" stroke={BL} strokeWidth={2}
+                  dot={p => <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill={getC(p.payload.mape)} stroke="none" />}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* BIAS por revisao */}
+          <div style={{ fontSize: 9, color: TXS, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 5 }}>
+            BIAS por revisao (+ subprevisao / - sobreprevisao)
+          </div>
+          <div style={{ background: BGC, borderRadius: 6, padding: '12px 6px 6px', border: '0.5px solid ' + BD, marginBottom: 10 }}>
+            <ResponsiveContainer width="100%" height={140}>
+              <BarChart data={vintage.filter(r => r.bias != null)} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
+                <XAxis dataKey="label" tick={{ fontSize: 9, fill: TXS }} tickLine={false} axisLine={{ stroke: BD }} />
+                <YAxis tick={{ fontSize: 9, fill: TXS }} tickLine={false} axisLine={false} tickFormatter={v => v.toFixed(0) + '%'} width={36} />
+                <Tooltip formatter={v => [v.toFixed(1) + '%', 'BIAS']} contentStyle={{ background: '#1a1a1a', border: '0.5px solid ' + BD, fontSize: 11, color: TX }} />
+                <ReferenceLine y={0} stroke={BDL} strokeWidth={1} />
+                <Bar dataKey="bias" shape={p => <rect x={p.x} y={p.y} width={p.width} height={Math.abs(p.height || 0)} fill={p.bias >= 0 ? GR : RE} rx={2} />} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div style={{ fontSize: 9, color: TXM, lineHeight: 1.8 }}>
+            MAPE = media(|Erro%|) - MAE = media(|Erro un|) - BIAS+ = subprevisao - Apurado = proxy RAW[T+1][T] - Bom &lt;10% - Aceit. 10-25% - Ruim &gt;25%
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
