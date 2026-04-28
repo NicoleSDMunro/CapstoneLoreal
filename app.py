@@ -105,11 +105,16 @@ def col_like(df,keys):
 def produto_info(base_df,bom_df,produto,estoque_final):
     info={"Origem":"-","CoberturaTargetDias":75,"HBdias":"-","LTSemanas":16,"Demanda":"-","EstoqueFinal":estoque_final}
     if not base_df.empty:
-        pcol=col_like(base_df,["produto"]) or base_df.columns[0]
-        row=base_df[base_df[pcol].astype(str).str.upper().str.strip().eq(produto.upper())]
+        pcol = base_df.columns[1] if len(base_df.columns) > 1 else base_df.columns[0]
+        row = base_df[base_df[pcol].astype(str).str.upper().str.strip().eq(produto.upper())]
+        if row.empty:
+            pcol_alt=col_like(base_df,["produto"]) or base_df.columns[0]
+            row=base_df[base_df[pcol_alt].astype(str).str.upper().str.strip().eq(produto.upper())]
         if not row.empty:
             row=row.iloc[0]
-            for key,names in {"Origem":["origem"],"CoberturaTargetDias":["cobertura"],"HBdias":["hb"],"Demanda":["demanda"]}.items():
+            if len(base_df.columns) > 2 and pd.notna(row.iloc[2]): info["Origem"] = row.iloc[2]
+            if len(base_df.columns) > 11 and pd.notna(row.iloc[11]): info["Demanda"] = row.iloc[11]
+            for key,names in {"CoberturaTargetDias":["cobertura"],"HBdias":["hb"]}.items():
                 c=col_like(base_df,names)
                 if c is not None and pd.notna(row[c]): info[key]=row[c]
     if not bom_df.empty:
