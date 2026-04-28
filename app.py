@@ -18,6 +18,9 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .hero-title { font-size:34px; line-height:.92; font-weight:900; letter-spacing:-1.5px; text-transform:uppercase; margin-bottom:10px; color:#fff; white-space:nowrap; overflow:hidden; }
 .hero-subtitle { color:#9ca3af; font-size:14px; margin-bottom:18px; }
 .sep { height:1px; background:#202020; margin:18px 0 25px; }
+.empty-panel { background:#101010; border:1px dashed #3a3a3a; border-radius:10px; padding:34px 28px; margin-top:22px; }
+.empty-title { font-size:24px; font-weight:850; margin-bottom:8px; }
+.empty-text { color:#a5a5a5; font-size:15px; line-height:1.6; }
 .panel { background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:16px 18px; margin-bottom:14px; }
 .product-panel { padding:14px 18px 12px; }
 .product-panel .stSelectbox label { color:#9b9b9b !important; text-transform:uppercase; letter-spacing:1.5px; font-size:13px; font-weight:500; }
@@ -100,7 +103,7 @@ def col_like(df,keys):
         if all(k.lower() in str(c).lower() for k in keys): return c
     return None
 def produto_info(base_df,bom_df,produto,estoque_final):
-    info={"Origem":"Terceiro","CoberturaTargetDias":75,"HBdias":"-","LTSemanas":16,"Demanda":"Queda","EstoqueFinal":estoque_final}
+    info={"Origem":"-","CoberturaTargetDias":75,"HBdias":"-","LTSemanas":16,"Demanda":"-","EstoqueFinal":estoque_final}
     if not base_df.empty:
         pcol=col_like(base_df,["produto"]) or base_df.columns[0]
         row=base_df[base_df[pcol].astype(str).str.upper().str.strip().eq(produto.upper())]
@@ -115,19 +118,6 @@ def produto_info(base_df,bom_df,produto,estoque_final):
             vals=pd.to_numeric(bom_df[bom_df[pcol].astype(str).str.upper().str.strip().eq(produto.upper())][ltcol],errors="coerce").dropna()
             if len(vals): info["LTSemanas"]=float(vals.max())
     return info
-def example_long():
-    rows=[]; rng=np.random.default_rng(7)
-    for p in list("ABCDE"):
-        mult=1-.06*(ord(p)-65)
-        for ri,rev in enumerate(REVISOES):
-            pv=np.array([240,230,240,430,520,460,420,300,180,230,230,250,260])*1000*mult*(1+.02*ri)
-            prod=np.array([230,320,450,620,690,520,380,240,230,240,240,0,0])*1000*mult*(1+.015*ri)
-            est=np.array([190,280,480,680,860,930,890,820,840,850,860,840,324])*1000*mult*(1+.01*ri)
-            for var,arr in [("PV",pv),("Producao",prod),("Estoque",est)]:
-                for mes,val in zip(MESES,arr): rows.append({"Produto":p,"Variavel":var,"Revisao":rev,"Mes":mes,"Valor":float(val*rng.normal(1,.025)),"RealizadoProxy":rev==mes})
-    base=pd.DataFrame({"Produto":list("ABCDE"),"Origem":["Terceiro","Interno","Interno","Terceiro","Interno"],"Cobertura Target":[75,90,60,80,75],"HB":[20,25,15,20,30],"Cenário de Demanda":["Queda","Aumento","Aumento","Estável","Queda"]})
-    bom=pd.DataFrame({"Produto":["A","A","B","B","C","D","E"],"Insumo":["I1","I2","I1","I3","I2","I4","I5"],"LT semanas":[16,12,8,11,18,9,10]})
-    return pd.DataFrame(rows),base,bom
 def format_num(v):
     v=float(v)
     if abs(v)>=1_000_000: return f"{v/1_000_000:.1f}M"
@@ -147,24 +137,39 @@ def struct_box(label,value,sub,cls,last=False):
 
 with st.sidebar:
     st.header("Base de dados")
-    arquivo=st.file_uploader("Suba o Excel: Base de Dados - PUC (1).xlsx",type=["xlsx"])
-    usar_exemplo=st.toggle("Usar base exemplo",value=True)
-
-if arquivo is not None:
-    xls=pd.ExcelFile(arquivo); base_df=parse_sheet(xls,"Base"); bom_df=parse_sheet(xls,"BOM")
-    partes=[]
-    for p in [s for s in xls.sheet_names if str(s).strip().upper() in PRODUTOS]:
-        partes.append(parse_product_sheet(xls,p.strip().upper()))
-    if not partes: st.error("Não consegui extrair as abas A–P."); st.stop()
-    long_df=pd.concat(partes,ignore_index=True)
-elif usar_exemplo:
-    long_df,base_df,bom_df=example_long()
-else:
-    st.info("Suba sua base Excel no menu lateral ou ative a base exemplo."); st.stop()
+    arquivo=st.file_uploader("Suba sua base Excel",type=["xlsx"])
+    st.caption("O arquivo pode ter qualquer nome, desde que respeite o formato: abas Base, BOM e produtos A–P.")
 
 st.markdown('<div class="hero-title">SMART LAUNCH & RESPONSIVENESS TO GROWTH</div>',unsafe_allow_html=True)
 st.markdown('<div class="hero-subtitle">Produtos A–E · Jun/2025-Jun/2026</div>',unsafe_allow_html=True)
 st.markdown('<div class="sep"></div>',unsafe_allow_html=True)
+
+if arquivo is None:
+    st.markdown('''
+    <div class="empty-panel">
+        <div class="empty-title">Nenhuma base carregada</div>
+        <div class="empty-text">
+            Envie um arquivo Excel no menu lateral para liberar o dashboard. O arquivo não precisa ter um nome específico, mas deve manter o formato esperado: aba <strong>Base</strong>, aba <strong>BOM</strong> e abas de produto <strong>A–P</strong> com blocos de PV, Produção e Estoque.
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+    st.stop()
+
+try:
+    xls=pd.ExcelFile(arquivo); base_df=parse_sheet(xls,"Base"); bom_df=parse_sheet(xls,"BOM")
+    partes=[]; erros=[]
+    for p in [s for s in xls.sheet_names if str(s).strip().upper() in PRODUTOS]:
+        try: partes.append(parse_product_sheet(xls,p.strip().upper()))
+        except Exception as e: erros.append(str(e))
+    if not partes:
+        st.error("Não consegui extrair as abas de produto. Verifique se existem abas A–P com os blocos PV, Produção e Estoque.")
+        if erros: st.code("\n".join(erros[:6]))
+        st.stop()
+    long_df=pd.concat(partes,ignore_index=True)
+except Exception as e:
+    st.error("Não foi possível ler a base enviada. Verifique se o arquivo está no formato esperado.")
+    st.code(str(e))
+    st.stop()
 
 produtos=sorted(long_df["Produto"].unique())
 options=[]
