@@ -262,7 +262,6 @@ est_final=pivot["Estoque"].dropna().iloc[-1] if "Estoque" in pivot and len(pivot
 info=produto_info(base_df,bom_df,produto,est_final)
 lt_sem=float(pd.to_numeric(info["LTSemanas"],errors="coerce") if pd.notna(info["LTSemanas"]) else 16); lt_dias=int(round(lt_sem*7)); lt_meses=lt_dias/30
 ct_dias=float(pd.to_numeric(info["CoberturaTargetDias"],errors="coerce") if pd.notna(info["CoberturaTargetDias"]) else 75); ct_meses=ct_dias/30; ct_sem=ct_dias/7
-metrics=derived_metrics(base_prod, pivot, rev, ct_dias)
 lt_cls="red" if lt_sem>16 else "orange" if lt_sem>10 else "green"; ct_cls="red" if lt_dias>ct_dias else "green"; dem_cls="red" if "queda" in str(info["Demanda"]).lower() else "green"; est_cls="red" if est_final<0 else ""
 
 st.markdown('<div class="struct-wrapper">',unsafe_allow_html=True)
@@ -272,15 +271,6 @@ for i,(lab,val,sub,cls) in enumerate(items):
     with scols[i]: struct_box(lab,val,sub,cls,last=(i==len(items)-1))
 st.markdown('</div>',unsafe_allow_html=True)
 
-st.markdown('<div class="section-title">INDICADORES DERIVADOS - SPRINT 3</div>', unsafe_allow_html=True)
-ind_cols=st.columns(4)
-with ind_cols[0]: indicator_card("Cobertura", format_days(metrics["cobertura_dias"]), metrics["cobertura_status"], metrics["cobertura_cls"], "Estoque / (PV mensal ÷ 30). Indica quantos dias o estoque sustenta a demanda planejada.")
-with ind_cols[1]: indicator_card("Cobertura vs Target", format_pct(metrics["cobertura_vs_target"]), metrics["cobertura_status"], metrics["cobertura_cls"], "Cobertura em dias dividida pelo target da aba Base. Apenas leitura informativa.")
-with ind_cols[2]: indicator_card("Desvio Demanda", format_pct(metrics["desvio_demanda"]), metrics["severidade_demanda"], metrics["severidade_cls"], "(Realizado proxy diagonal T,T - PV planejado) / PV planejado.")
-with ind_cols[3]: indicator_card("Meses Críticos", str(metrics["meses_criticos"]), "desvio < -10%", "red" if metrics["meses_criticos"]>0 else "green", "Quantidade de meses do horizonte com desvio de demanda menor que -10%.")
-ind_cols2=st.columns(2)
-with ind_cols2[0]: indicator_card("Tendência Demanda", metrics["tendencia_demanda"], metrics["tendencia_demanda"], metrics["tendencia_demanda_cls"], "Compara média dos próximos 3 meses com média dos 3 meses anteriores.")
-with ind_cols2[1]: indicator_card("Tendência Estoque", metrics["tendencia_estoque"], metrics["tendencia_estoque"], metrics["tendencia_estoque_cls"], "Compara estoque final do horizonte com estoque inicial do horizonte.")
 
 st.markdown('<div class="tab-single"><span>VISAO POR REVISAO</span></div>',unsafe_allow_html=True)
 st.markdown('<div class="review-panel">',unsafe_allow_html=True)
