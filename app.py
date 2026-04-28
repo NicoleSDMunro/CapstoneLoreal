@@ -37,8 +37,11 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .tab-single span { display:inline-block; padding:0 26px 14px 26px; text-transform:uppercase; letter-spacing:2px; font-size:15px; font-weight:800; color:#fff; border-bottom:4px solid #fff; }
 .review-panel { background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:20px 18px 16px; margin-bottom:14px; }
 .review-title { font-size:20px; font-weight:900; letter-spacing:.3px; margin-bottom:18px; }
-.month-row button { height:36px; border-radius:4px !important; border:1px solid #303030 !important; background:#161616 !important; color:#a6adb8 !important; font-weight:650 !important; padding:0 !important; }
-.month-row button[kind="primary"] { background: var(--accent) !important; color:#050505 !important; border-color: var(--accent) !important; }
+.month-row button[kind="secondary"] { height:36px; border-radius:4px !important; border:1px solid #303030 !important; background:#171717 !important; color:#a6adb8 !important; font-weight:650 !important; padding:0 !important; box-shadow:none !important; }
+.month-row button[kind="secondary"] p { color:#a6adb8 !important; }
+.month-row button[kind="secondary"]:hover { background:#222222 !important; border-color:#3a3a3a !important; color:#ffffff !important; }
+.month-row button[kind="primary"] { height:36px; border-radius:4px !important; background: var(--accent) !important; color:#050505 !important; border:1px solid var(--accent) !important; font-weight:800 !important; padding:0 !important; box-shadow:none !important; }
+.month-row button[kind="primary"] p { color:#050505 !important; font-weight:800 !important; }
 .metric-card { min-height:112px; background:#101010; border:1px solid #2a2a2a; border-radius:6px; padding:20px 18px; }
 .metric-card.danger { border-top:4px solid #ef4444; }
 .metric-label { color:#5e5e5e; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; font-weight:500; }
