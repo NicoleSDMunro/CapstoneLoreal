@@ -23,9 +23,9 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .product-panel .stSelectbox label { color:#9b9b9b !important; text-transform:uppercase; letter-spacing:1.5px; font-size:13px; font-weight:500; }
 .product-panel [data-baseweb="select"] > div { background:#151515 !important; border:1px solid #333 !important; border-radius:6px !important; color:#fff !important; min-height:40px; }
 .product-panel [data-baseweb="select"] span { color:#fff !important; font-weight:650; }
-.struct-grid { display:grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border:1px solid #2a2a2a; border-radius:8px; overflow:hidden; margin-bottom:26px; background:#101010; width:100%; }
-.struct-cell { padding:16px 16px 14px; min-height:96px; border-right:1px solid #2a2a2a; box-sizing:border-box; }
-.struct-cell:last-child { border-right:none; }
+.struct-wrapper { background:#101010; border:1px solid #2a2a2a; border-radius:8px; overflow:hidden; margin-bottom:26px; }
+.struct-box { min-height:96px; padding:16px 16px 14px; border-right:1px solid #2a2a2a; box-sizing:border-box; background:#101010; }
+.struct-box-last { min-height:96px; padding:16px 16px 14px; box-sizing:border-box; background:#101010; }
 .label { color:#666; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; font-weight:500; }
 .value { color:#fff; font-size:18px; font-weight:800; margin-top:7px; white-space:nowrap; }
 .sub { color:#9ca3af; font-size:13px; margin-top:7px; white-space:nowrap; }
@@ -48,7 +48,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .alert-box { background:linear-gradient(90deg,rgba(239,68,68,.22),rgba(239,68,68,.05)); border-left:6px solid #ef4444; }
 .warn-box { background:linear-gradient(90deg,rgba(250,204,21,.18),rgba(250,204,21,.04)); border-left:6px solid #facc15; }
 .success-box { background:linear-gradient(90deg,rgba(22,163,123,.20),rgba(22,163,123,.04)); border-left:6px solid #16a37b; }
-@media (max-width: 900px) { .struct-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .struct-cell { border-bottom:1px solid #2a2a2a; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -142,6 +141,9 @@ def cor_revisao(rev):
 def metric_card(label,value,delta="",accent=False,danger=False):
     cls="metric-card danger" if danger else "metric-card"; vcls="metric-value accent" if accent else "metric-value"
     st.markdown(f'<div class="{cls}"><div class="metric-label">{label}</div><div class="{vcls}">{value}</div><div class="metric-delta">{delta}</div></div>',unsafe_allow_html=True)
+def struct_box(label,value,sub,cls,last=False):
+    box_cls="struct-box-last" if last else "struct-box"
+    st.markdown(f'<div class="{box_cls}"><div class="label">{label}</div><div class="value {cls}">{value}</div><div class="sub">{sub}</div></div>',unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Base de dados")
@@ -165,7 +167,6 @@ st.markdown('<div class="hero-subtitle">Produtos A–E · Jun/2025-Jun/2026</div
 st.markdown('<div class="sep"></div>',unsafe_allow_html=True)
 
 produtos=sorted(long_df["Produto"].unique())
-base_prod_tmp=long_df[long_df["Revisao"]==REVISOES[-1]]
 options=[]
 for p in produtos:
     piv=long_df[(long_df["Produto"]==p)&(long_df["Revisao"]==REVISOES[-1])].pivot_table(index="Mes",columns="Variavel",values="Valor",aggfunc="sum").reindex(MESES)
@@ -187,11 +188,13 @@ est_final=pivot["Estoque"].dropna().iloc[-1] if "Estoque" in pivot and len(pivot
 info=produto_info(base_df,bom_df,produto,est_final)
 lt_sem=float(pd.to_numeric(info["LTSemanas"],errors="coerce") if pd.notna(info["LTSemanas"]) else 16); lt_dias=int(round(lt_sem*7)); lt_meses=lt_dias/30
 ct_dias=float(pd.to_numeric(info["CoberturaTargetDias"],errors="coerce") if pd.notna(info["CoberturaTargetDias"]) else 75); ct_meses=ct_dias/30; ct_sem=ct_dias/7
-
 lt_cls="red" if lt_sem>16 else "orange" if lt_sem>10 else "green"; ct_cls="red" if lt_dias>ct_dias else "green"; dem_cls="red" if "queda" in str(info["Demanda"]).lower() else "green"; est_cls="red" if est_final<0 else ""
-st.markdown('<div class="struct-grid">',unsafe_allow_html=True)
-for lab,val,sub,cls in [("ORIGEM",info["Origem"],"","orange"),("LT MAX",f"{lt_sem:.0f} sem",f"aprox {lt_meses:.1f}m - {lt_dias}d",lt_cls),("COB. TARGET",f"{ct_dias:.0f}d",f"aprox {ct_meses:.1f}m - {ct_sem:.1f}sem",ct_cls),("DEMANDA",info["Demanda"],"",dem_cls),("EST. FINAL",format_num(est_final),"ultima rev - jun/26",est_cls)]:
-    st.markdown(f'<div class="struct-cell"><div class="label">{lab}</div><div class="value {cls}">{val}</div><div class="sub">{sub}</div></div>',unsafe_allow_html=True)
+
+st.markdown('<div class="struct-wrapper">',unsafe_allow_html=True)
+scols=st.columns(5, gap="small")
+items=[("ORIGEM",info["Origem"],"","orange"),("LT MAX",f"{lt_sem:.0f} sem",f"aprox {lt_meses:.1f}m - {lt_dias}d",lt_cls),("COB. TARGET",f"{ct_dias:.0f}d",f"aprox {ct_meses:.1f}m - {ct_sem:.1f}sem",ct_cls),("DEMANDA",info["Demanda"],"",dem_cls),("EST. FINAL",format_num(est_final),"ultima rev - jun/26",est_cls)]
+for i,(lab,val,sub,cls) in enumerate(items):
+    with scols[i]: struct_box(lab,val,sub,cls,last=(i==len(items)-1))
 st.markdown('</div>',unsafe_allow_html=True)
 
 st.markdown('<div class="tab-single"><span>VISAO POR REVISAO</span></div>',unsafe_allow_html=True)
