@@ -1,344 +1,269 @@
+from pathlib import Path
 import re
-import streamlit as st
-import pandas as pd
 import numpy as np
+import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
-st.set_page_config(page_title="Smart Launch | Supply Chain", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
+from forecasting import (
+    MODELS, as_period, plabel, read_base_table, read_bom, product_meta,
+    parse_pv_sheet, realized_from_matrix, model_available, forecast_model,
+    build_audit, evaluated_until, choose_model, horizon_metrics,
+    maturity_history, cumulative_history, critical_window_months, validate_audit,
+)
+
+st.set_page_config(page_title="Etapa 2 | Seleção Dinâmica do Modelo", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.stApp { background:#000; color:#f5f5f5; }
-.block-container { padding-top: .25rem; max-width: 1188px; }
-[data-testid="stHeader"] { background: transparent; }
-[data-testid="stSidebar"] { background:#0d0d0d; border-right:1px solid #242424; }
-#MainMenu, footer { visibility:hidden; }
-.hero-title { font-size:34px; line-height:.92; font-weight:900; letter-spacing:-1.5px; text-transform:uppercase; margin-bottom:10px; color:#fff; white-space:nowrap; overflow:hidden; }
-.hero-subtitle { color:#9ca3af; font-size:14px; margin-bottom:18px; }
-.sep { height:1px; background:#202020; margin:18px 0 25px; }
-.empty-panel { background:#101010; border:1px dashed #3a3a3a; border-radius:10px; padding:34px 28px; margin-top:22px; }
-.empty-title { font-size:24px; font-weight:850; margin-bottom:8px; }
-.empty-text { color:#a5a5a5; font-size:15px; line-height:1.6; }
-.panel { background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:16px 18px; margin-bottom:14px; }
-.product-panel { padding:14px 18px 12px; }
-.product-panel .stSelectbox label { color:#9b9b9b !important; text-transform:uppercase; letter-spacing:1.5px; font-size:13px; font-weight:500; }
-.product-panel [data-baseweb="select"] > div { background:#151515 !important; border:1px solid #333 !important; border-radius:6px !important; color:#fff !important; min-height:40px; }
-.product-panel [data-baseweb="select"] span { color:#fff !important; font-weight:650; }
-.struct-wrapper { background:#101010; border:1px solid #2a2a2a; border-radius:8px; overflow:hidden; margin-bottom:26px; }
-.struct-box { min-height:96px; padding:16px 16px 14px; border-right:1px solid #2a2a2a; box-sizing:border-box; background:#101010; }
-.struct-box-last { min-height:96px; padding:16px 16px 14px; box-sizing:border-box; background:#101010; }
-.label { color:#666; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; font-weight:500; }
-.value { color:#fff; font-size:18px; font-weight:800; margin-top:7px; white-space:nowrap; }
-.sub { color:#9ca3af; font-size:13px; margin-top:7px; white-space:nowrap; }
-.orange { color:#e8a24a; } .red { color:#f05a5f; } .blue { color:#5b9cff; } .green { color:#1ca37e; } .yellow { color:#f4c21f; }
-.badge { display:inline-block; padding:5px 10px; border-radius:999px; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.8px; margin-top:8px; }
-.badge.green { background:rgba(28,163,126,.14); color:#1ca37e; border:1px solid rgba(28,163,126,.45); }
-.badge.yellow { background:rgba(250,204,21,.13); color:#f4c21f; border:1px solid rgba(250,204,21,.45); }
-.badge.red { background:rgba(240,90,95,.13); color:#f05a5f; border:1px solid rgba(240,90,95,.45); }
-.indicator-card { min-height:128px; background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:18px 16px; }
-.indicator-card:hover { border-color:#3a3a3a; }
-.help { color:#8f8f8f; font-size:12px; margin-top:7px; line-height:1.35; }
-.tab-single { border-bottom:1px solid #262626; margin:22px 0 20px; }
-.tab-single span { display:inline-block; padding:0 26px 14px 26px; text-transform:uppercase; letter-spacing:2px; font-size:15px; font-weight:800; color:#fff; border-bottom:4px solid #fff; }
-.review-panel { background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:20px 18px 16px; margin-bottom:14px; }
-.review-title { font-size:20px; font-weight:900; letter-spacing:.3px; margin-bottom:18px; }
-.month-row div[data-testid="stButton"] button { height:36px !important; border-radius:4px !important; border:1px solid #303030 !important; background:#171717 !important; color:#a6adb8 !important; font-weight:650 !important; padding:0 !important; box-shadow:none !important; }
-.month-row div[data-testid="stButton"] button p { color:#a6adb8 !important; }
-.month-row div[data-testid="stButton"] button:hover { background:#222222 !important; border-color:#3a3a3a !important; color:#ffffff !important; }
-.month-row div[data-testid="stButton"] button:hover p { color:#ffffff !important; }
-.month-row div[data-testid="stButton"] button[kind="primary"] { background: var(--accent) !important; color:#050505 !important; border-color: var(--accent) !important; font-weight:800 !important; }
-.month-row div[data-testid="stButton"] button[kind="primary"] p { color:#050505 !important; font-weight:800 !important; }
-.metric-card { min-height:112px; background:#101010; border:1px solid #2a2a2a; border-radius:6px; padding:20px 18px; }
-.metric-card.danger { border-top:4px solid #ef4444; }
-.metric-label { color:#5e5e5e; font-size:13px; text-transform:uppercase; letter-spacing:1.5px; font-weight:500; }
-.metric-value { color:#fff; font-size:26px; font-weight:850; margin-top:12px; line-height:1.05; }
-.metric-value.accent { color:var(--accent); }
-.metric-delta { color:#9ca3af; font-size:14px; margin-top:8px; }
-.section-title { color:#9a9a9a; text-transform:uppercase; letter-spacing:2px; font-size:15px; font-weight:500; margin:18px 0 10px; }
-.chart-card { background:#101010; border:1px solid #2a2a2a; border-radius:8px; padding:8px 12px 2px; }
-.alert-box,.warn-box,.success-box { border-radius:8px; padding:16px 20px; color:#fff; font-size:16px; line-height:1.5; margin-bottom:10px; }
-.alert-box { background:linear-gradient(90deg,rgba(239,68,68,.22),rgba(239,68,68,.05)); border-left:6px solid #ef4444; }
-.warn-box { background:linear-gradient(90deg,rgba(250,204,21,.18),rgba(250,204,21,.04)); border-left:6px solid #facc15; }
-.success-box { background:linear-gradient(90deg,rgba(22,163,123,.20),rgba(22,163,123,.04)); border-left:6px solid #16a37b; }
+html,body,[class*="css"]{font-family:'Inter',sans-serif}.stApp{background:#050505;color:#f5f5f5}
+.block-container{padding-top:.5rem;padding-bottom:4rem;max-width:1240px}[data-testid="stHeader"]{background:transparent}#MainMenu,footer{visibility:hidden}
+.hero-k{color:#f4c21f;font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase}.hero-t{font-size:34px;line-height:1.03;font-weight:900;letter-spacing:-1.2px;margin-top:7px}.hero-s{color:#9298a3;font-size:14px;max-width:920px;line-height:1.55;margin-top:9px}
+.sep{height:1px;background:#222;margin:18px 0 22px}.section{color:#9ca3af;text-transform:uppercase;letter-spacing:1.8px;font-size:13px;font-weight:750;margin:25px 0 10px}
+.panel,.card,.choice{background:#101010;border:1px solid #292929;border-radius:10px}.panel{padding:18px;margin-bottom:15px}.card{padding:15px;min-height:102px}.lab{color:#6f7680;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700}.val{color:#fff;font-size:21px;font-weight:850;margin-top:8px}.sub{color:#8f96a3;font-size:12px;margin-top:5px;line-height:1.35}
+.choice{padding:24px;border-top:4px solid #f4c21f;background:linear-gradient(145deg,#171717,#0d0d0d)}.choice.bad{border-top-color:#ef6666}.choice .k{color:#8f96a3;font-size:12px;letter-spacing:1.8px;font-weight:800}.choice .m{font-size:42px;font-weight:900;letter-spacing:-1.3px;margin:8px 0}.choice.bad .m{font-size:27px}.choice .txt{color:#c5cad2;font-size:14px;line-height:1.55}.note{display:inline-block;margin-top:10px;padding:5px 10px;border:1px solid rgba(244,194,31,.45);border-radius:999px;color:#f4c21f;background:rgba(244,194,31,.07);font-size:11px;font-weight:800}
+.changed{background:linear-gradient(90deg,rgba(91,156,255,.13),rgba(91,156,255,.02));border-left:5px solid #5b9cff;border-radius:8px;padding:15px 18px;margin:10px 0 16px}.changed small{color:#9ca3af}
+.badge{display:inline-block;margin-top:8px;padding:4px 8px;border-radius:999px;border:1px solid rgba(69,196,155,.4);background:rgba(69,196,155,.08);color:#45c49b;font-size:11px;font-weight:800}
+[data-testid="stSelectbox"] label{color:#8f96a3!important;font-weight:700!important;text-transform:uppercase;letter-spacing:1px;font-size:11px!important}[data-baseweb="select"]>div{background:#151515!important;border-color:#343434!important;color:#fff!important}
+div[data-testid="stButton"] button{border:1px solid #333!important;background:#151515!important;color:#cbd1db!important;border-radius:7px!important;font-weight:750!important}div[data-testid="stButton"] button[kind="primary"]{background:#f4c21f!important;border-color:#f4c21f!important;color:#080808!important}div[data-testid="stButton"] button[kind="primary"] p{color:#080808!important}
 </style>
 """, unsafe_allow_html=True)
 
-MESES=["jun/25","jul/25","ago/25","set/25","out/25","nov/25","dez/25","jan/26","fev/26","mar/26","abr/26","mai/26","jun/26"]
-REVISOES=MESES[:9]; PRODUTOS=list("ABCDEFGHIJKLMNOP")
-MONTH_MAP={"jan":1,"fev":2,"mar":3,"abr":4,"mai":5,"jun":6,"jul":7,"ago":8,"set":9,"out":10,"nov":11,"dez":12}
+FORECAST_H=14
 
-def mes_to_period(x):
-    s=str(x).strip().lower(); m=re.search(r"(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[\-/ ]?(\d{2,4})",s)
-    if not m: return None
-    ano=int(m.group(2)); ano=2000+ano if ano<100 else ano
-    return pd.Period(year=ano,month=MONTH_MAP[m.group(1)],freq="M")
-def period_label(p):
-    inv={v:k for k,v in MONTH_MAP.items()}; return f"{inv[p.month]}/{str(p.year)[-2:]}"
-def find_header_row(raw):
-    for i in range(min(len(raw),30)):
-        if sum(mes_to_period(v) is not None for v in raw.iloc[i].tolist())>=5: return i
-    return None
-def find_blocks(raw):
-    blocks={}
-    for i in range(len(raw)):
-        text=" ".join([str(v).upper() for v in raw.iloc[i].tolist() if pd.notna(v)])
-        if "PV" in text and ("SELL" in text or "SEL" in text): blocks["PV"]=i
-        elif "PRODU" in text: blocks["Producao"]=i
-        elif "ESTOQUE" in text: blocks["Estoque"]=i
-    return blocks
-def parse_product_sheet(xls,product):
-    raw=pd.read_excel(xls,sheet_name=product,header=None); blocks=find_blocks(raw)
-    if len(blocks)<3: raise ValueError(f"Não encontrei os 3 blocos na aba {product}.")
-    out=[]; ordered=sorted(blocks.items(),key=lambda kv:kv[1])
-    for idx,(var,start) in enumerate(ordered):
-        end=ordered[idx+1][1] if idx+1<len(ordered) else len(raw); sub=raw.iloc[start+1:end].dropna(how="all"); hrel=find_header_row(sub.reset_index(drop=True))
-        if hrel is None: continue
-        header_idx=sub.index[hrel]; header=raw.iloc[header_idx]
-        target_cols=[(j,mes_to_period(v)) for j,v in enumerate(header.tolist()) if mes_to_period(v) is not None]
-        label_col=max(0,target_cols[0][0]-1)
-        for r in range(header_idx+1,end):
-            revp=mes_to_period(raw.iat[r,label_col])
-            if revp is None: continue
-            for j,tp in target_cols:
-                val=pd.to_numeric(raw.iat[r,j],errors="coerce")
-                if pd.notna(val): out.append({"Produto":product,"Variavel":var,"Revisao":period_label(revp),"Mes":period_label(tp),"Valor":float(val),"RealizadoProxy":revp==tp})
-    return pd.DataFrame(out)
-def parse_sheet(xls,name):
-    try:
-        df=pd.read_excel(xls,sheet_name=name); df.columns=[str(c).strip() for c in df.columns]; return df
-    except Exception: return pd.DataFrame()
-def col_like(df,keys):
-    for c in df.columns:
-        if all(k.lower() in str(c).lower() for k in keys): return c
-    return None
-def produto_info(base_df,bom_df,produto,estoque_final):
-    info={"Origem":"-","CoberturaTargetDias":75,"HBdias":"-","LTSemanas":16,"Demanda":"-","EstoqueFinal":estoque_final}
-    if not base_df.empty:
-        pcol = base_df.columns[1] if len(base_df.columns) > 1 else base_df.columns[0]
-        row = base_df[base_df[pcol].astype(str).str.upper().str.strip().eq(produto.upper())]
-        if row.empty:
-            pcol_alt=col_like(base_df,["produto"]) or base_df.columns[0]
-            row=base_df[base_df[pcol_alt].astype(str).str.upper().str.strip().eq(produto.upper())]
-        if not row.empty:
-            row=row.iloc[0]
-            if len(base_df.columns) > 2 and pd.notna(row.iloc[2]): info["Origem"] = row.iloc[2]
-            if len(base_df.columns) > 11 and pd.notna(row.iloc[11]): info["Demanda"] = row.iloc[11]
-            for key,names in {"CoberturaTargetDias":["cobertura"],"HBdias":["hb"]}.items():
-                c=col_like(base_df,names)
-                if c is not None and pd.notna(row[c]): info[key]=row[c]
-    if not bom_df.empty:
-        pcol=col_like(bom_df,["produto"]) or bom_df.columns[0]; ltcol=col_like(bom_df,["lt"]) or col_like(bom_df,["lead"])
-        if ltcol is not None:
-            vals=pd.to_numeric(bom_df[bom_df[pcol].astype(str).str.upper().str.strip().eq(produto.upper())][ltcol],errors="coerce").dropna()
-            if len(vals): info["LTSemanas"]=float(vals.max())
-    return info
-def derived_metrics(base_prod, pivot, rev, cobertura_target):
-    # Sprint 3: camada independente de UI para indicadores derivados informativos.
-    pv = pivot.set_index("Mes")["PV"] if "PV" in pivot else pd.Series(dtype=float)
-    estoque = pivot.set_index("Mes")["Estoque"] if "Estoque" in pivot else pd.Series(dtype=float)
-    demanda_diaria = pv.replace(0, np.nan) / 30
-    cobertura_dias_series = estoque / demanda_diaria
-    cobertura_dias = float(cobertura_dias_series.dropna().iloc[-1]) if len(cobertura_dias_series.dropna()) else np.nan
-    cobertura_vs_target = cobertura_dias / cobertura_target if cobertura_target else np.nan
-    if pd.isna(cobertura_vs_target): cobertura_status, cobertura_cls = "n/a", "yellow"
-    elif cobertura_vs_target <= 1: cobertura_status, cobertura_cls = "ok", "green"
-    elif cobertura_vs_target <= 1.25: cobertura_status, cobertura_cls = "atenção", "yellow"
-    else: cobertura_status, cobertura_cls = "alerta", "red"
-
-    real = base_prod[base_prod["RealizadoProxy"]].pivot_table(index="Mes", columns="Variavel", values="Valor", aggfunc="sum")
-    real_pv = real["PV"] if "PV" in real else pd.Series(dtype=float)
-    desvio = ((real_pv - pv) / pv.replace(0, np.nan)).reindex(MESES)
-    desvio_atual = float(desvio.dropna().iloc[-1]) if len(desvio.dropna()) else np.nan
-    meses_criticos = int((desvio < -0.10).sum()) if len(desvio.dropna()) else 0
-    if pd.isna(desvio_atual): severidade, sev_cls = "n/a", "yellow"
-    elif abs(desvio_atual) < .10: severidade, sev_cls = "estável", "green"
-    elif -0.25 <= desvio_atual <= -0.10: severidade, sev_cls = "queda moderada", "yellow"
-    elif desvio_atual < -0.25: severidade, sev_cls = "queda severa", "red"
-    else: severidade, sev_cls = "alta", "green"
-
-    idx = MESES.index(rev) if rev in MESES else 0
-    prev3 = [m for m in MESES[max(0, idx-3):idx] if m in pv.index]
-    next3 = [m for m in MESES[idx+1:idx+4] if m in pv.index]
-    prev_mean = pv.loc[prev3].mean() if prev3 else np.nan
-    next_mean = pv.loc[next3].mean() if next3 else np.nan
-    if pd.isna(prev_mean) or prev_mean == 0 or pd.isna(next_mean): tendencia_demanda, tend_dem_cls = "n/a", "yellow"
-    else:
-        delta = (next_mean - prev_mean) / prev_mean
-        if delta < -0.05: tendencia_demanda, tend_dem_cls = "queda", "red"
-        elif delta > 0.05: tendencia_demanda, tend_dem_cls = "alta", "green"
-        else: tendencia_demanda, tend_dem_cls = "estável", "yellow"
-
-    estoque_valid = estoque.dropna()
-    if len(estoque_valid) >= 2:
-        delta_est = (estoque_valid.iloc[-1] - estoque_valid.iloc[0]) / abs(estoque_valid.iloc[0]) if estoque_valid.iloc[0] != 0 else np.nan
-        if pd.isna(delta_est): tendencia_estoque, tend_est_cls = "n/a", "yellow"
-        elif delta_est > .05: tendencia_estoque, tend_est_cls = "acumulando", "red"
-        elif delta_est < -.05: tendencia_estoque, tend_est_cls = "reduzindo", "green"
-        else: tendencia_estoque, tend_est_cls = "estável", "yellow"
-    else:
-        tendencia_estoque, tend_est_cls = "n/a", "yellow"
-
-    return {"cobertura_dias": cobertura_dias, "cobertura_vs_target": cobertura_vs_target, "cobertura_status": cobertura_status, "cobertura_cls": cobertura_cls, "desvio_demanda": desvio_atual, "severidade_demanda": severidade, "severidade_cls": sev_cls, "meses_criticos": meses_criticos, "tendencia_demanda": tendencia_demanda, "tendencia_demanda_cls": tend_dem_cls, "tendencia_estoque": tendencia_estoque, "tendencia_estoque_cls": tend_est_cls, "desvio_series": desvio, "cobertura_series": cobertura_dias_series}
-def format_num(v):
+def short(v):
+    if v is None or pd.isna(v): return "—"
     v=float(v)
-    if abs(v)>=1_000_000: return f"{v/1_000_000:.1f}M"
-    if abs(v)>=1000: return f"{v:,.0f}".replace(",",".")
-    return f"{v:.0f}"
-def format_pct(v):
-    return "n/a" if pd.isna(v) else f"{v*100:.1f}%"
-def format_days(v):
-    return "n/a" if pd.isna(v) else f"{v:.0f}d"
-def short_num(v):
-    v=float(v)
-    return f"{v/1_000_000:.1f}M" if abs(v)>=1_000_000 else f"{v/1000:.0f}k" if abs(v)>=1000 else f"{v:.0f}"
-def cor_revisao(rev):
-    return "#5b9cff" if str(rev).startswith("jun") else "#16a37b" if str(rev).startswith("jul") else "#e5533f" if str(rev).startswith("ago") else "#f4c21f"
-def metric_card(label,value,delta="",accent=False,danger=False):
-    cls="metric-card danger" if danger else "metric-card"; vcls="metric-value accent" if accent else "metric-value"
-    st.markdown(f'<div class="{cls}"><div class="metric-label">{label}</div><div class="{vcls}">{value}</div><div class="metric-delta">{delta}</div></div>',unsafe_allow_html=True)
-def indicator_card(label,value,status,cls,help_text):
-    st.markdown(f'<div class="indicator-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div><span class="badge {cls}">{status}</span><div class="help">{help_text}</div></div>', unsafe_allow_html=True)
-def struct_box(label,value,sub,cls,last=False):
-    box_cls="struct-box-last" if last else "struct-box"
-    st.markdown(f'<div class="{box_cls}"><div class="label">{label}</div><div class="value {cls}">{value}</div><div class="sub">{sub}</div></div>',unsafe_allow_html=True)
+    if abs(v)>=1_000_000: return f"{v/1_000_000:.1f} mi".replace(".",",")
+    if abs(v)>=1_000: return f"{v/1_000:.1f} mil".replace(".",",")
+    return f"{v:,.0f}".replace(",",".")
 
+def signed(v):
+    if v is None or pd.isna(v): return "—"
+    return f"{float(v):+,.0f}".replace(",",".")
+
+def card(label,value,sub=""):
+    st.markdown(f'<div class="card"><div class="lab">{label}</div><div class="val">{value}</div><div class="sub">{sub}</div></div>',unsafe_allow_html=True)
+
+def layout(fig,h=350,legend=True):
+    fig.update_layout(paper_bgcolor="#101010",plot_bgcolor="#101010",font=dict(color="#9ca3af",size=12),height=h,
+                      margin=dict(l=18,r=18,t=22,b=36),
+                      legend=dict(orientation="h",y=-.22,x=0) if legend else dict(visible=False),
+                      hoverlabel=dict(bgcolor="#171717",bordercolor="#2a2a2a",font=dict(color="#fff")))
+    fig.update_xaxes(gridcolor="#202020",zerolinecolor="#202020")
+    fig.update_yaxes(gridcolor="#202020",zerolinecolor="#202020")
+    return fig
+
+st.markdown('<div class="hero-k">TCC · ETAPA 2 · FORECASTING</div><div class="hero-t">COM O QUE EU SABIA NAQUELE MOMENTO,<br>QUAL MODELO EU TERIA ESCOLHIDO?</div><div class="hero-s">Cada fechamento é reconstruído sem usar informação futura. Entra um novo realizado, os erros conhecidos são atualizados, os modelos são comparados novamente e a previsão é refeita.</div><div class="sep"></div>',unsafe_allow_html=True)
+
+DEFAULT=Path(__file__).with_name("Base de Dados - PUC (2).xlsx")
 with st.sidebar:
     st.header("Base de dados")
-    arquivo=st.file_uploader("Suba sua base Excel",type=["xlsx"])
-    st.caption("O arquivo pode ter qualquer nome, desde que respeite o formato: abas Base, BOM e produtos A–P.")
-
-st.markdown('<div class="hero-title">SMART LAUNCH & RESPONSIVENESS TO GROWTH</div>',unsafe_allow_html=True)
-st.markdown('<div class="hero-subtitle">Produtos A–E · Jun/2025-Jun/2026</div>',unsafe_allow_html=True)
-st.markdown('<div class="sep"></div>',unsafe_allow_html=True)
-
-if arquivo is None:
-    st.markdown('''
-    <div class="empty-panel">
-        <div class="empty-title">Nenhuma base carregada</div>
-        <div class="empty-text">
-            Envie um arquivo Excel no menu lateral para liberar o dashboard. O arquivo não precisa ter um nome específico, mas deve manter o formato esperado: aba <strong>Base</strong>, aba <strong>BOM</strong> e abas de produto <strong>A–P</strong> com blocos de PV, Produção e Estoque.
-        </div>
-    </div>
-    ''', unsafe_allow_html=True)
+    up=st.file_uploader("Suba a base Excel",type=["xlsx"])
+    st.caption("A estrutura esperada é a mesma da base do TCC: Base, BOM e abas A–P.")
+source=up if up is not None else (DEFAULT if DEFAULT.exists() else None)
+if source is None:
+    st.markdown('<div class="panel"><b>Envie a base Excel no menu lateral.</b><br><span style="color:#9ca3af">Assim que o arquivo for carregado, o dashboard monta automaticamente toda a Etapa 2.</span></div>',unsafe_allow_html=True)
     st.stop()
 
 try:
-    xls=pd.ExcelFile(arquivo); base_df=parse_sheet(xls,"Base"); bom_df=parse_sheet(xls,"BOM")
-    partes=[]; erros=[]
-    for p in [s for s in xls.sheet_names if str(s).strip().upper() in PRODUTOS]:
-        try: partes.append(parse_product_sheet(xls,p.strip().upper()))
-        except Exception as e: erros.append(str(e))
-    if not partes:
-        st.error("Não consegui extrair as abas de produto. Verifique se existem abas A–P com os blocos PV, Produção e Estoque.")
-        if erros: st.code("\n".join(erros[:6]))
-        st.stop()
-    long_df=pd.concat(partes,ignore_index=True)
+    xls=pd.ExcelFile(source)
+    base=read_base_table(xls); bom=read_bom(xls)
+    products=sorted([str(s).strip().upper() for s in xls.sheet_names if re.fullmatch(r"[A-Pa-p]",str(s).strip())])
 except Exception as e:
-    st.error("Não foi possível ler a base enviada. Verifique se o arquivo está no formato esperado.")
-    st.code(str(e))
-    st.stop()
+    st.error("Não foi possível abrir a base."); st.code(str(e)); st.stop()
 
-produtos=sorted(long_df["Produto"].unique())
-options=[]
-for p in produtos:
-    piv=long_df[(long_df["Produto"]==p)&(long_df["Revisao"]==REVISOES[-1])].pivot_table(index="Mes",columns="Variavel",values="Valor",aggfunc="sum").reindex(MESES)
-    est=piv["Estoque"].dropna().iloc[-1] if "Estoque" in piv and len(piv["Estoque"].dropna()) else 0
-    inf=produto_info(base_df,bom_df,p,est)
-    options.append(f"Produto {p} - {inf['Origem']} - Cob.T {float(pd.to_numeric(inf['CoberturaTargetDias'],errors='coerce') or 75):.0f}d - LT {float(pd.to_numeric(inf['LTSemanas'],errors='coerce') or 16):.0f}sem - {inf['Demanda']}")
+product=st.selectbox("Produto",products,index=products.index("L") if "L" in products else 0)
+try:
+    matrix=parse_pv_sheet(xls,product)
+    realized=realized_from_matrix(matrix)
+    audit=build_audit(matrix,realized,FORECAST_H)
+except Exception as e:
+    st.error(f"Não consegui preparar a Etapa 2 para o produto {product}."); st.code(str(e)); st.stop()
 
-st.markdown('<div class="panel product-panel">',unsafe_allow_html=True)
-sel=st.selectbox("Produto",options,index=0)
-st.markdown('</div>',unsafe_allow_html=True)
-produto=re.search(r"Produto ([A-P])",sel).group(1)
-base_prod=long_df[long_df["Produto"]==produto]
-revisoes=[m for m in REVISOES if m in set(base_prod["Revisao"])] or sorted(base_prod["Revisao"].unique())
-if "revisao" not in st.session_state or st.session_state.revisao not in revisoes: st.session_state.revisao=revisoes[0]
-rev=st.session_state.revisao; accent=cor_revisao(rev)
-st.markdown(f"<style>:root{{--accent:{accent};}}</style>",unsafe_allow_html=True)
-pivot=base_prod[base_prod["Revisao"]==rev].pivot_table(index="Mes",columns="Variavel",values="Valor",aggfunc="sum").reindex(MESES).reset_index()
-est_final=pivot["Estoque"].dropna().iloc[-1] if "Estoque" in pivot and len(pivot["Estoque"].dropna()) else 0
-info=produto_info(base_df,bom_df,produto,est_final)
-lt_sem=float(pd.to_numeric(info["LTSemanas"],errors="coerce") if pd.notna(info["LTSemanas"]) else 16); lt_dias=int(round(lt_sem*7)); lt_meses=lt_dias/30
-ct_dias=float(pd.to_numeric(info["CoberturaTargetDias"],errors="coerce") if pd.notna(info["CoberturaTargetDias"]) else 75); ct_meses=ct_dias/30; ct_sem=ct_dias/7
-lt_cls="red" if lt_sem>16 else "orange" if lt_sem>10 else "green"; ct_cls="red" if lt_dias>ct_dias else "green"; dem_cls="red" if "queda" in str(info["Demanda"]).lower() else "green"; est_cls="red" if est_final<0 else ""
+meta=product_meta(base,bom,product)
+critical=critical_window_months(meta)
+closures=list(realized.index)
+key=f"closure_{product}"
+if key not in st.session_state or st.session_state[key] not in closures:
+    st.session_state[key]=closures[min(3,len(closures)-1)]
+closure=st.session_state[key]
+known=realized[realized.index<=closure]
+decision=choose_model(audit,closure)
 
-st.markdown('<div class="struct-wrapper">',unsafe_allow_html=True)
-scols=st.columns(5, gap="small")
-items=[("ORIGEM",info["Origem"],"","orange"),("LT MAX",f"{lt_sem:.0f} sem",f"aprox {lt_meses:.1f}m - {lt_dias}d",lt_cls),("COB. TARGET",f"{ct_dias:.0f}d",f"aprox {ct_meses:.1f}m - {ct_sem:.1f}sem",ct_cls),("DEMANDA",info["Demanda"],"",dem_cls),("EST. FINAL",format_num(est_final),"ultima rev - jun/26",est_cls)]
-for i,(lab,val,sub,cls) in enumerate(items):
-    with scols[i]: struct_box(lab,val,sub,cls,last=(i==len(items)-1))
-st.markdown('</div>',unsafe_allow_html=True)
+st.markdown('<div class="section">Produto e maturidade</div>',unsafe_allow_html=True)
+c=st.columns(6)
+with c[0]: card("Origem",meta["origem"])
+with c[1]: card("Histórico disponível",f"{len(known)} meses",f"até {plabel(closure)}")
+with c[2]: card("Lead time",f'{float(meta["lt_weeks"]):.0f} sem' if pd.notna(meta["lt_weeks"]) else "—")
+with c[3]: card("Cobertura target",f'{float(meta["cobertura"]):.0f} dias' if pd.notna(meta["cobertura"]) else "—")
+with c[4]: card("Janela crítica",f"{critical} meses" if critical else "—","LT + cobertura + 1 mês")
+with c[5]: card("Último realizado",plabel(realized.index.max()),short(realized.iloc[-1]))
 
+st.markdown('<div class="section">Linha do tempo — fechamento mensal</div>',unsafe_allow_html=True)
+l,mid,r=st.columns([1.25,8.5,1.25])
+with l:
+    if st.button("← MÊS ANTERIOR",use_container_width=True,disabled=closure==closures[0]):
+        st.session_state[key]=closures[max(0,closures.index(closure)-1)]; st.rerun()
+with r:
+    if st.button("PRÓXIMO MÊS →",use_container_width=True,disabled=closure==closures[-1]):
+        st.session_state[key]=closures[min(len(closures)-1,closures.index(closure)+1)]; st.rerun()
+with mid:
+    cc=st.columns(len(closures))
+    for i,m in enumerate(closures):
+        with cc[i]:
+            if st.button(plabel(m),key=f"{product}_{m}",type="primary" if m==closure else "secondary",use_container_width=True):
+                st.session_state[key]=m; st.rerun()
 
-st.markdown('<div class="tab-single"><span>VISAO POR REVISAO</span></div>',unsafe_allow_html=True)
-st.markdown('<div class="review-panel">',unsafe_allow_html=True)
-st.markdown(f'<div class="review-title">REVISAO: <span style="color:var(--accent)">{rev}</span></div>',unsafe_allow_html=True)
-cols=st.columns(len(revisoes)+2,gap="small")
-with cols[-2]:
-    if st.button("<",use_container_width=True):
-        i=max(0,revisoes.index(rev)-1); st.session_state.revisao=revisoes[i]; st.rerun()
-with cols[-1]:
-    if st.button(">",use_container_width=True):
-        i=min(len(revisoes)-1,revisoes.index(rev)+1); st.session_state.revisao=revisoes[i]; st.rerun()
-st.markdown('<div class="month-row">',unsafe_allow_html=True)
-for i,mes in enumerate(revisoes):
-    with cols[i]:
-        if st.button(mes,key=f"rev_{mes}",type="primary" if mes==rev else "secondary",use_container_width=True):
-            st.session_state.revisao=mes; st.rerun()
-st.markdown('</div></div>',unsafe_allow_html=True)
+st.markdown(f'<div class="panel"><b>FECHAMENTO: {plabel(closure)}</b><br><span style="color:#9ca3af">Histórico disponível neste momento: {len(known)} meses. Tudo depois deste ponto é futuro desconhecido para a decisão.</span></div>',unsafe_allow_html=True)
 
-pv_total=pivot["PV"].sum() if "PV" in pivot else 0; prev_idx=revisoes.index(rev)-1
-if prev_idx>=0:
-    prev=base_prod[base_prod["Revisao"]==revisoes[prev_idx]].pivot_table(index="Mes",columns="Variavel",values="Valor",aggfunc="sum").reindex(MESES)
-    var_pv=(pivot.set_index("Mes")["PV"]-prev["PV"])/prev["PV"].replace(0,np.nan); meses_acima=int((var_pv.abs()>.10).sum()); delta_total=(pv_total-prev["PV"].sum())/prev["PV"].sum(); delta_txt=f"{delta_total*100:+.0f}% vs anterior"
-else:
-    prev=None; meses_acima=0; delta_txt="base"
-
-c1,c2,c3,c4=st.columns(4)
-with c1: metric_card("REVISAO",rev,"",accent=True)
-with c2: metric_card("PV TOTAL",short_num(pv_total),delta_txt)
-with c3: metric_card("MESES >10%",f"{meses_acima}m","",danger=meses_acima>=5)
-with c4: metric_card("EST. FINAL",format_num(est_final),"jun/2026",danger=est_final<0)
-
-st.markdown(f'<div class="section-title">PV - PRODUCAO - ESTOQUE - {rev.upper()}</div>',unsafe_allow_html=True)
-st.markdown('<div class="chart-card">',unsafe_allow_html=True)
+st.markdown('<div class="section">1 · O que eu sabia neste mês?</div>',unsafe_allow_html=True)
+future=realized[realized.index>closure]
 fig=go.Figure()
-for var,color,dash,name in [("PV","#5b9cff","solid","PV (Sell In)"),("Producao","#45c49b","dash","Producao"),("Estoque","#e7895e","dot","Estoque")]:
-    if var in pivot: fig.add_trace(go.Scatter(x=pivot["Mes"],y=pivot[var],mode="lines+markers",name=name,line=dict(width=3,color=color,dash=dash),marker=dict(size=7),hovertemplate=f"{name}: %{{y:,.0f}}<extra></extra>"))
-if rev in MESES: fig.add_vline(x=rev,line_width=1.5,line_dash="dash",line_color="#6b7280")
-fig.update_layout(paper_bgcolor="#101010",plot_bgcolor="#101010",font=dict(color="#9ca3af",size=13),height=430,margin=dict(l=30,r=18,t=18,b=35),legend=dict(orientation="h",y=-.22,x=.20,font=dict(size=14,color="#cfd4dc")),xaxis=dict(gridcolor="#202020",zerolinecolor="#202020"),yaxis=dict(gridcolor="#202020",zerolinecolor="#202020"),hovermode="x unified",hoverlabel=dict(bgcolor="#171717",bordercolor="#2a2a2a",font=dict(color="#f5f5f5",size=13)))
-st.plotly_chart(fig,use_container_width=True)
-st.markdown('</div>',unsafe_allow_html=True)
+fig.add_trace(go.Scatter(x=[p.to_timestamp() for p in known.index],y=known.values,mode="lines+markers",name="Realizado conhecido",line=dict(color="#f4c21f",width=3)))
+if len(future):
+    fig.add_trace(go.Scatter(x=[p.to_timestamp() for p in future.index],y=future.values,mode="lines+markers",name="Futuro ainda desconhecido",line=dict(color="#4b5563",width=2,dash="dot"),opacity=.65))
+fig.add_vline(x=closure.to_timestamp(),line_dash="dash",line_color="#6b7280")
+fig.update_yaxes(title="Demanda")
+st.plotly_chart(layout(fig,330),use_container_width=True)
 
-st.markdown(f'<div class="section-title">CONCLUSAO - PRODUTO {produto} - {rev.upper()}</div>',unsafe_allow_html=True)
-alerts=[]
-if est_final<0: alerts.append(("alert-box","Ruptura projetada", "estoque final negativo em jun/26."))
-if lt_dias>ct_dias: alerts.append(("alert-box","Risco estrutural",f"LT ({lt_dias}d) maior que Cobertura Target ({ct_dias:.0f}d). Demanda surpresa nao pode ser respondida a tempo."))
-if meses_acima>0: alerts.append(("warn-box","Revisao instavel",f"{meses_acima} meses tiveram variacao de PV superior a 10% vs revisao anterior."))
-if not alerts: alerts.append(("success-box","OK","Forecast estavel, sem alerta critico nos parametros atuais."))
-for cls,t,msg in alerts: st.markdown(f'<div class="{cls}"><strong>{t}:</strong> {msg}</div>',unsafe_allow_html=True)
+st.markdown('<div class="section">2 · Modelos disponíveis naquele momento</div>',unsafe_allow_html=True)
+avail=[m for m in MODELS if model_available(m,len(known))]+["L'Oréal oficial"]
+unavail=[m for m in MODELS if not model_available(m,len(known))]
+cols=st.columns(len(avail))
+req={"Naive":"1 mês","MM2":"2 meses","MM3":"3 meses","SES":"2 meses","Holt":"3 meses","L'Oréal oficial":"benchmark"}
+for col,m in zip(cols,avail):
+    with col:
+        st.markdown(f'<div class="card"><div class="lab">{m}</div><div class="val" style="font-size:17px">DISPONÍVEL</div><div class="sub">mínimo: {req[m]}</div><span class="badge">{"benchmark" if m=="L’Oréal oficial" else "calculável"}</span></div>',unsafe_allow_html=True)
+if unavail: st.caption("Ainda indisponíveis por falta de histórico: "+", ".join(unavail)+".")
 
-st.markdown('<div class="section-title">VARIACAO VS MES ANTERIOR</div>',unsafe_allow_html=True)
-if prev_idx>=0 and prev is not None:
-    atual=pivot.set_index("Mes")[[c for c in ["PV","Producao","Estoque"] if c in pivot]]
-    anterior=prev[[c for c in ["PV","Producao","Estoque"] if c in prev]]
-    tab=((atual-anterior)/anterior.replace(0,np.nan)*100).round(1).reset_index()
-    st.markdown('<div class="chart-card">', unsafe_allow_html=True)
-    fig_var=go.Figure()
-    for col,color,name in [("PV","#5b9cff","PV"),("Producao","#45c49b","Produção"),("Estoque","#e7895e","Estoque")]:
-        if col in tab:
-            fig_var.add_trace(go.Bar(x=tab["Mes"], y=tab[col], name=name, marker_color=color, hovertemplate=f"{name}: %{{y:.1f}}%<extra></extra>"))
-    fig_var.add_hline(y=0, line_width=1, line_color="#6b7280")
-    fig_var.add_hline(y=10, line_width=1, line_dash="dash", line_color="#facc15")
-    fig_var.add_hline(y=-10, line_width=1, line_dash="dash", line_color="#facc15")
-    fig_var.update_layout(paper_bgcolor="#101010",plot_bgcolor="#101010",font=dict(color="#9ca3af",size=13),height=330,margin=dict(l=30,r=18,t=18,b=35),barmode="group",legend=dict(orientation="h",y=-.25,x=.25,font=dict(size=14,color="#cfd4dc")),xaxis=dict(gridcolor="#202020",zerolinecolor="#202020"),yaxis=dict(title="Variação %",gridcolor="#202020",zerolinecolor="#202020"),hovermode="x unified",hoverlabel=dict(bgcolor="#171717",bordercolor="#2a2a2a",font=dict(color="#f5f5f5",size=13)))
-    st.plotly_chart(fig_var,use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.dataframe(tab,use_container_width=True)
+st.markdown('<div class="section">3 · Modelo indicado neste fechamento</div>',unsafe_allow_html=True)
+if decision["model"] is None:
+    st.markdown(f'<div class="choice bad"><div class="k">MODELO INDICADO NESTE FECHAMENTO</div><div class="m">AINDA NÃO HÁ HISTÓRICO SUFICIENTE PARA COMPARAÇÃO</div><div class="txt">{decision["message"]} O dashboard não força um vencedor com apenas uma observação isolada.</div></div>',unsafe_allow_html=True)
 else:
-    st.info("Revisão base: não existe mês anterior para comparar.")
+    note=f'<div class="note">{decision.get("note","")}</div>' if decision.get("note") else ""
+    st.markdown(f'<div class="choice"><div class="k">MODELO INDICADO NESTE FECHAMENTO</div><div class="m">{decision["model"]}</div><div class="txt">{decision["message"]}</div>{note}</div>',unsafe_allow_html=True)
 
-with st.expander("Ver dados extraídos"):
-    st.dataframe(base_prod,use_container_width=True)
+idx=closures.index(closure)
+if idx>0:
+    prev=closures[idx-1]; pdx=choose_model(audit,prev)
+    prevm=pdx["model"] or "sem escolha"; curm=decision["model"] or "sem escolha"
+    curerr=evaluated_until(audit,closure,decision["model"],1) if decision["model"] else pd.DataFrame()
+    bias=curerr.erro.mean() if len(curerr) else np.nan
+    f1=forecast_model(decision["model"],known.values,1) if decision["model"] else None
+    phrase=f'O modelo mudou de <b>{prevm}</b> para <b>{curm}</b>.' if prevm!=curm else f'<b>{curm}</b> continua sendo o modelo selecionado.'
+    st.markdown(f'<div class="changed"><b>O QUE MUDOU DESDE O ÚLTIMO FECHAMENTO?</b><br><small>Entrou o realizado de {plabel(closure)}: {short(realized.loc[closure])} un. · {phrase}<br>MAE anterior: {short(pdx.get("mae",np.nan))} · MAE atual: {short(decision.get("mae",np.nan))} · Bias atual: {signed(bias)} · Nova previsão M-1: {short(f1[0]) if f1 is not None else "—"}</small></div>',unsafe_allow_html=True)
+
+st.markdown('<div class="section">4 · Como o modelo foi escolhido?</div>',unsafe_allow_html=True)
+metrics=decision["metrics"]
+if metrics.empty:
+    st.info("Ainda não existem pelo menos dois modelos com erros realizados suficientes e compatíveis para uma comparação justa.")
+else:
+    show=metrics.sort_values("MAE").copy()
+    colors=["#f4c21f" if m==decision["model"] else "#4b5563" for m in show.modelo]
+    fig=go.Figure(go.Bar(x=show.MAE,y=show.modelo,orientation="h",marker_color=colors,
+                         customdata=np.stack([show.Bias,show.n],axis=-1),
+                         hovertemplate="MAE: %{x:,.0f}<br>Bias: %{customdata[0]:+,.0f}<br>n: %{customdata[1]:.0f}<extra></extra>"))
+    fig.update_xaxes(title="MAE em observações compatíveis · menor = melhor"); fig.update_yaxes(categoryorder="total descending")
+    st.plotly_chart(layout(fig,315,False),use_container_width=True)
+    table=show[["modelo","MAE","Bias","n"]].rename(columns={"modelo":"Modelo","Bias":"Bias (realizado - previsto)"})
+    st.dataframe(table,use_container_width=True,hide_index=True)
+    st.caption("MAE é o critério principal. Bias, estabilidade entre horizontes, n e simplicidade são diagnósticos; não há score ponderado arbitrário.")
+
+st.markdown('<div class="section">5 · Erros do modelo selecionado até este mês</div>',unsafe_allow_html=True)
+if decision["model"]:
+    err=evaluated_until(audit,closure,decision["model"],1).sort_values("mes_alvo")
+    if len(err):
+        fig=go.Figure(go.Bar(x=[p.to_timestamp() for p in err.mes_alvo],y=err.erro,marker_color=["#45c49b" if e>=0 else "#ef6666" for e in err.erro],hovertemplate="Erro: %{y:+,.0f}<extra></extra>"))
+        fig.add_hline(y=0,line_color="#777",line_width=1); fig.update_yaxes(title="Erro = realizado - previsão")
+        st.plotly_chart(layout(fig,290,False),use_container_width=True)
+        c=st.columns(3)
+        with c[0]: card("Bias acumulado",signed(err.erro.mean()),"negativo = previsão acima do realizado")
+        with c[1]: card("Desvio-padrão",short(err.erro.std(ddof=1)) if len(err)>1 else "—","dos resíduos M-1")
+        with c[2]: card("Resíduos disponíveis",str(len(err)),"rolling M-1")
+        st.caption("Erro negativo = previsão acima do realizado. Erro positivo = previsão abaixo do realizado.")
+    else: st.info("O modelo pode ser calculado, mas ainda não existe erro M-1 realizado para medi-lo.")
+else: st.info("Os resíduos aparecerão quando houver histórico suficiente para selecionar um modelo.")
+
+st.markdown('<div class="section">6 · Como a escolha do modelo mudou com o tempo?</div>',unsafe_allow_html=True)
+mat=maturity_history(audit,realized)
+fig=go.Figure(go.Scatter(x=[p.to_timestamp() for p in mat.fechamento],y=mat.modelo,mode="lines+markers+text",text=mat.modelo,textposition="top center",
+                         line=dict(color="#5b9cff",width=2),marker=dict(size=10,color="#f4c21f"),
+                         customdata=np.stack([mat.historico,mat.MAE.fillna(-1),mat.n],axis=-1),
+                         hovertemplate="Histórico: %{customdata[0]:.0f} meses<br>Modelo: %{y}<br>MAE: %{customdata[1]:,.0f}<br>n: %{customdata[2]:.0f}<extra></extra>"))
+fig.add_vline(x=closure.to_timestamp(),line_dash="dash",line_color="#6b7280")
+st.plotly_chart(layout(fig,330,False),use_container_width=True)
+st.caption("Maturidade = meses de histórico acumulados. Horizonte = quantos meses à frente tentamos prever. São conceitos diferentes.")
+
+st.markdown('<div class="section">7 · Comparação dos modelos ao longo do tempo</div>',unsafe_allow_html=True)
+hist=cumulative_history(audit,realized)
+if len(hist):
+    fig=px.line(hist,x=hist.fechamento.dt.to_timestamp(),y="MAE",color="modelo",markers=True,labels={"x":"Fechamento","modelo":"Modelo"})
+    fig.add_vline(x=closure.to_timestamp(),line_dash="dash",line_color="#6b7280")
+    st.plotly_chart(layout(fig,380),use_container_width=True)
+else: st.info("O gráfico começa quando existem erros compatíveis suficientes.")
+
+st.markdown('<div class="section">8 · Desempenho por horizonte</div>',unsafe_allow_html=True)
+hm=horizon_metrics(audit,closure)
+if len(hm):
+    mae=hm.pivot(index="modelo",columns="horizonte",values="MAE").reindex(columns=["M-1","M-2","M-3"])
+    nn=hm.pivot(index="modelo",columns="horizonte",values="n").reindex(columns=["M-1","M-2","M-3"])
+    txt=mae.copy().astype(object)
+    for rr in txt.index:
+        for cc in txt.columns:
+            v=mae.loc[rr,cc]; n=nn.loc[rr,cc] if rr in nn.index and cc in nn.columns else np.nan
+            txt.loc[rr,cc]="—" if pd.isna(v) else f"{v:,.0f}<br>n={int(n)}"
+    fig=go.Figure(go.Heatmap(z=mae.values,x=mae.columns,y=mae.index,text=txt.values,texttemplate="%{text}",
+                             colorscale=[[0,"#173f38"],[.5,"#6b5a18"],[1,"#54262a"]],colorbar=dict(title="MAE"),
+                             hovertemplate="%{y} · %{x}<br>MAE: %{z:,.0f}<extra></extra>"))
+    st.plotly_chart(layout(fig,370,False),use_container_width=True)
+    st.caption("n = quantidade de previsões já comparáveis com o realizado. Em cada horizonte, os modelos usam meses-alvo compatíveis. n muito baixo = amostra insuficiente para comparação robusta.")
+else: st.info("Ainda não há realizado suficiente para avaliar M-1, M-2 ou M-3.")
+
+st.markdown('<div class="section">9 · Se estivéssemos neste mês, esta seria nossa previsão</div>',unsafe_allow_html=True)
+if decision["model"]:
+    pred=forecast_model(decision["model"],known.values,FORECAST_H)
+    fut=pd.period_range(closure+1,periods=FORECAST_H,freq="M")
+    fig=go.Figure()
+    fig.add_trace(go.Scatter(x=[p.to_timestamp() for p in known.index],y=known.values,mode="lines+markers",name="Histórico realizado",line=dict(color="#f4c21f",width=3)))
+    fig.add_trace(go.Scatter(x=[closure.to_timestamp()]+[p.to_timestamp() for p in fut],y=[known.iloc[-1]]+list(pred),mode="lines+markers",name=f"Previsão · {decision['model']}",line=dict(color="#5b9cff",width=3)))
+    if critical: fig.add_vrect(x0=closure.to_timestamp(),x1=(closure+critical).to_timestamp(how="end"),fillcolor="#ef6666",opacity=.08,line_width=0,annotation_text="janela crítica",annotation_position="top left")
+    fig.add_vrect(x0=closure.to_timestamp(),x1=fut[-1].to_timestamp(how="end"),fillcolor="#5b9cff",opacity=.035,line_width=0)
+    st.plotly_chart(layout(fig,390),use_container_width=True)
+    st.caption(f"O horizonte operacional mostrado é de {FORECAST_H} meses. Isso não significa que todos os horizontes longos estejam validados com a mesma robustez.")
+else: st.info("Sem comparação suficiente, o dashboard não transforma um modelo em vencedor. O Naive pode servir apenas como referência operacional inicial.")
+
+st.markdown('<div class="section">10 · Saída da Etapa 2 para a Etapa 3</div>',unsafe_allow_html=True)
+if decision["model"]:
+    res=evaluated_until(audit,closure,decision["model"],1).sort_values("mes_alvo")
+    pred=forecast_model(decision["model"],known.values,FORECAST_H)
+    c=st.columns(6)
+    vals=[("Modelo selecionado",decision["model"],""),("Previsão M-1",short(pred[0]),"unidades"),("Resíduos",str(len(res)),"rolling M-1"),
+          ("Bias",signed(res.erro.mean()) if len(res) else "—","média dos resíduos"),("Desvio-padrão",short(res.erro.std(ddof=1)) if len(res)>1 else "—","dos resíduos"),
+          ("Janela crítica",f"{critical} meses" if critical else "—","LT + cobertura + 1")]
+    for col,(la,va,su) in zip(c,vals):
+        with col: card(la,va,su)
+    if len(res): st.caption(f"Período dos resíduos: {plabel(res.mes_alvo.min())} a {plabel(res.mes_alvo.max())}. Essas informações são a saída da Etapa 2 para a simulação estocástica da Etapa 3. Este dashboard não calcula estoque, excesso, gatilhos ou Monte Carlo.")
+else: st.info("A saída para a Etapa 3 só é consolidada quando existe uma seleção baseada em erros realizados.")
+
+with st.expander("Regra de seleção e tabela de auditoria"):
+    st.markdown("""
+**Regra explícita**
+1. Cada origem usa somente realizados disponíveis até aquele fechamento.
+2. Naive usa o último realizado; MM2 os 2 anteriores; MM3 os 3 anteriores; SES e Holt são reajustados em cada origem.
+3. Um erro só entra depois que o realizado do mês-alvo existe.
+4. A seleção usa MAE em observações compatíveis entre os modelos elegíveis, nos horizontes M-1 a M-3.
+5. É preciso haver pelo menos 2 erros compatíveis e 2 modelos comparáveis. Caso contrário, não há vencedor.
+6. Quando a amostra é pequena e os MAEs estão praticamente empatados (até 5%), vale a parcimônia: o modelo mais simples entre os empatados é preferido.
+7. A previsão oficial L'Oréal é benchmark, não candidato automático à seleção.
+""")
+    view=audit[audit.origem_previsao<=closure].copy().sort_values(["origem_previsao","modelo","horizonte"])
+    view["fechamento"]=view.fechamento.map(plabel); view["origem_previsao"]=view.origem_previsao.map(plabel); view["mes_alvo"]=view.mes_alvo.map(plabel)
+    view=view[["fechamento","modelo","origem_previsao","horizonte","mes_alvo","previsto","realizado","erro"]]
+    st.dataframe(view,use_container_width=True,hide_index=True)
+    st.download_button("Baixar auditoria (.csv)",view.to_csv(index=False).encode("utf-8-sig"),file_name=f"auditoria_etapa2_{product}.csv",mime="text/csv")
+
+checks=validate_audit(audit,realized); ok=all(checks.values())
+st.markdown(f'<div class="panel"><b>Validação automática: <span style="color:{"#45c49b" if ok else "#ef6666"}">{"OK" if ok else "REVISAR"}</span></b><br><span style="color:#9ca3af">'+" · ".join([f"{k}: {'✓' if v else '✕'}" for k,v in checks.items()])+'</span></div>',unsafe_allow_html=True)
