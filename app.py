@@ -156,13 +156,38 @@ else:
 
 idx=closures.index(closure)
 if idx>0:
-    prev=closures[idx-1]; pdx=choose_model(audit,prev)
-    prevm=pdx["model"] or "sem escolha"; curm=decision["model"] or "sem escolha"
+    prev=closures[idx-1]
+    pdx=choose_model(audit,prev)
+    prevm=pdx["model"] or "sem escolha"
+    curm=decision["model"] or "sem escolha"
     curerr=evaluated_until(audit,closure,decision["model"],1) if decision["model"] else pd.DataFrame()
     bias=curerr.erro.mean() if len(curerr) else np.nan
     f1=forecast_model(decision["model"],known.values,1) if decision["model"] else None
-    phrase=f'O modelo mudou de <b>{prevm}</b> para <b>{curm}</b>.' if prevm!=curm else f'<b>{curm}</b> continua sendo o modelo selecionado.'
-    st.markdown(f'<div class="changed"><b>O QUE MUDOU DESDE O ÚLTIMO FECHAMENTO?</b><br><small>Entrou o realizado de {plabel(closure)}: {short(realized.loc[closure])} un. · {phrase}<br>MAE anterior: {short(pdx.get("mae",np.nan))} · MAE atual: {short(decision.get("mae",np.nan))} · Bias atual: {signed(bias)} · Nova previsão M-1: {short(f1[0]) if f1 is not None else "—"}</small></div>',unsafe_allow_html=True)
+
+    phrase=(
+        f'O modelo mudou de <b>{prevm}</b> para <b>{curm}</b>.'
+        if prevm!=curm
+        else f'<b>{curm}</b> continua sendo o modelo selecionado.'
+    )
+
+    prev_realizados=realized.index[realized.index<closure]
+    if len(prev_realizados)>0:
+        newly_known=prev_realizados.max()
+        realized_val=realized.get(newly_known,np.nan)
+        new_txt=f"{plabel(newly_known)}: {short(realized_val)} un." if pd.notna(realized_val) else f"{plabel(newly_known)}: sem realizado"
+    else:
+        new_txt="nenhum novo realizado"
+
+    st.markdown(
+        f'<div class="changed"><b>O QUE MUDOU DESDE O ÚLTIMO FECHAMENTO?</b>'
+        f'<br><small>Entrou o realizado de {new_txt} · {phrase}'
+        f'<br>MAE anterior: {short(pdx.get("mae",np.nan))}'
+        f' · MAE atual: {short(decision.get("mae",np.nan))}'
+        f' · Bias atual: {signed(bias)}'
+        f' · Nova previsão M-1: {short(f1[0]) if f1 is not None else "—"}'
+        f'</small></div>',
+        unsafe_allow_html=True
+    )
 
 st.markdown('<div class="section">4 · Como o modelo foi escolhido?</div>',unsafe_allow_html=True)
 metrics=decision["metrics"]
