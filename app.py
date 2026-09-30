@@ -89,12 +89,12 @@ except Exception as e:
 
 meta=product_meta(base,bom,product)
 critical=critical_window_months(meta)
-closures=list(realized.index)
+closures=list(matrix.index)
 key=f"closure_{product}"
 if key not in st.session_state or st.session_state[key] not in closures:
     st.session_state[key]=closures[min(3,len(closures)-1)]
 closure=st.session_state[key]
-known=realized[realized.index<=closure]
+known=realized[realized.index<closure]
 decision=choose_model(audit,closure)
 
 st.markdown('<div class="section">Produto e maturidade</div>',unsafe_allow_html=True)
@@ -121,10 +121,14 @@ with mid:
             if st.button(plabel(m),key=f"{product}_{m}",type="primary" if m==closure else "secondary",use_container_width=True):
                 st.session_state[key]=m; st.rerun()
 
-st.markdown(f'<div class="panel"><b>FECHAMENTO: {plabel(closure)}</b><br><span style="color:#9ca3af">Histórico disponível neste momento: {len(known)} meses. Tudo depois deste ponto é futuro desconhecido para a decisão.</span></div>',unsafe_allow_html=True)
+st.markdown(f'<div class="panel"><b>FECHAMENTO / VERSÃO: {plabel(closure)}</b><br><span style="color:#9ca3af">Histórico disponível neste momento: {len(known)} meses realizados. O realizado do próprio mês ainda não é conhecido nesta versão; ele aparece somente na versão seguinte.</span></div>',unsafe_allow_html=True)
+
+official_same_month = matrix.loc[closure, closure] if closure in matrix.index and closure in matrix.columns else np.nan
+if pd.notna(official_same_month):
+    st.caption(f"Previsão oficial L'Oréal feita no próprio mês ({plabel(closure)}): {short(official_same_month)} un. — este valor é previsão, não realizado.")
 
 st.markdown('<div class="section">1 · O que eu sabia neste mês?</div>',unsafe_allow_html=True)
-future=realized[realized.index>closure]
+future=realized[realized.index>=closure]
 fig=go.Figure()
 fig.add_trace(go.Scatter(x=[p.to_timestamp() for p in known.index],y=known.values,mode="lines+markers",name="Realizado conhecido",line=dict(color="#f4c21f",width=3)))
 if len(future):
@@ -192,7 +196,7 @@ if decision["model"]:
 else: st.info("Os resíduos aparecerão quando houver histórico suficiente para selecionar um modelo.")
 
 st.markdown('<div class="section">6 · Como a escolha do modelo mudou com o tempo?</div>',unsafe_allow_html=True)
-mat=maturity_history(audit,realized)
+mat=maturity_history(audit,realized,closures)
 fig=go.Figure(go.Scatter(x=[p.to_timestamp() for p in mat.fechamento],y=mat.modelo,mode="lines+markers+text",text=mat.modelo,textposition="top center",
                          line=dict(color="#5b9cff",width=2),marker=dict(size=10,color="#f4c21f"),
                          customdata=np.stack([mat.historico,mat.MAE.fillna(-1),mat.n],axis=-1),
@@ -202,7 +206,7 @@ st.plotly_chart(layout(fig,330,False),use_container_width=True)
 st.caption("Maturidade = meses de histórico acumulados. Horizonte = quantos meses à frente tentamos prever. São conceitos diferentes.")
 
 st.markdown('<div class="section">7 · Comparação dos modelos ao longo do tempo</div>',unsafe_allow_html=True)
-hist=cumulative_history(audit,realized)
+hist=cumulative_history(audit,realized,closures)
 if len(hist):
     fig=px.line(hist,x=hist.fechamento.dt.to_timestamp(),y="MAE",color="modelo",markers=True,labels={"x":"Fechamento","modelo":"Modelo"})
     fig.add_vline(x=closure.to_timestamp(),line_dash="dash",line_color="#6b7280")
