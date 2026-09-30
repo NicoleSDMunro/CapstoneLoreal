@@ -93,10 +93,16 @@ def parse_pv_sheet(xls,product):
     return m
 
 def realized_from_matrix(matrix):
+    """Realizado de um mês = valor desse mês na versão seguinte.
+    Ex.: realizado jun/25 = coluna jun/25 da linha/versão jul/25.
+    A diagonal é a previsão oficial feita no próprio mês, não o realizado.
+    """
     vals={}
-    for origin in matrix.index:
-        if origin in matrix.columns and pd.notna(matrix.loc[origin,origin]):
-            vals[origin]=float(matrix.loc[origin,origin])
+    origins=set(matrix.index)
+    for target in matrix.columns:
+        next_version=target+1
+        if next_version in origins and pd.notna(matrix.loc[next_version,target]):
+            vals[target]=float(matrix.loc[next_version,target])
     return pd.Series(vals,dtype=float).sort_index()
 
 def model_available(model,n):
@@ -120,8 +126,10 @@ def forecast_model(model,history,h):
 def build_audit(matrix,realized,max_h=14):
     rows=[]
     for origin in matrix.index:
-        hist=realized[realized.index<=origin]
-        if origin not in hist.index: continue
+        # Na versão/origem t, o realizado de t ainda não existe.
+        # Só são conhecidos realizados estritamente anteriores à origem.
+        hist=realized[realized.index<origin]
+        if len(hist)==0: continue
         for model in MODELS:
             if not model_available(model,len(hist)): continue
             pred=forecast_model(model,hist.values,max_h)
@@ -146,7 +154,8 @@ def build_audit(matrix,realized,max_h=14):
     return pd.DataFrame(rows)
 
 def evaluated_until(audit,closure,model=None,max_h=3):
-    df=audit[(audit.origem_previsao<=closure)&(audit.mes_alvo<=closure)&audit.realizado.notna()&(audit.horizonte<=max_h)].copy()
+    # O realizado do mês-alvo t só fica conhecido na versão t+1.
+    df=audit[(audit.origem_previsao<closure)&(audit.mes_alvo<closure)&audit.realizado.notna()&(audit.horizonte<=max_h)].copy()
     return df[df.modelo.eq(model)] if model else df
 
 def compatible_metrics(audit,closure):
@@ -205,17 +214,19 @@ def horizon_metrics(audit,closure):
             if len(s): rows.append({"modelo":m,"horizonte":f"M-{h}","MAE":s.erro.abs().mean(),"n":len(s)})
     return pd.DataFrame(rows)
 
-def maturity_history(audit,realized):
+def maturity_history(audit,realized,closures=None):
     rows=[]
-    for c in realized.index:
+    closures=list(closures) if closures is not None else list(realized.index+1)
+    for c in closures:
         d=choose_model(audit,c)
-        rows.append({"fechamento":c,"historico":int((realized.index<=c).sum()),"modelo":d["model"] or "—",
+        rows.append({"fechamento":c,"historico":int((realized.index<c).sum()),"modelo":d["model"] or "—",
                      "MAE":d.get("mae",np.nan),"n":d.get("common_n",0),"status":d["status"]})
     return pd.DataFrame(rows)
 
-def cumulative_history(audit,realized):
+def cumulative_history(audit,realized,closures=None):
     rows=[]
-    for c in realized.index:
+    closures=list(closures) if closures is not None else list(realized.index+1)
+    for c in closures:
         m,_,_=compatible_metrics(audit,c)
         for _,r in m.iterrows():
             rows.append({"fechamento":c,"modelo":r.modelo,"MAE":r.MAE,"n":r.n})
@@ -236,7 +247,7 @@ def validate_audit(audit,realized):
     ok=True
     for model,w in [("Naive",1),("MM2",2),("MM3",3)]:
         for origin in audit.loc[audit.modelo.eq(model),"origem_previsao"].unique():
-            hist=realized[realized.index<=origin]; exp=hist.iloc[-w:].mean()
+            hist=realized[realized.index<origin]; exp=hist.iloc[-w:].mean()
             vals=audit[(audit.modelo.eq(model))&(audit.origem_previsao.eq(origin))].previsto
             if len(vals) and not np.allclose(vals.values,exp,rtol=1e-8,atol=1e-8): ok=False
     checks["Naive/MM2/MM3 sem futuro"]=ok
