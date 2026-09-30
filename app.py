@@ -100,7 +100,9 @@ decision=choose_model(audit,closure)
 st.markdown('<div class="section">Produto e maturidade</div>',unsafe_allow_html=True)
 c=st.columns(6)
 with c[0]: card("Origem",meta["origem"])
-with c[1]: card("Histórico disponível",f"{len(known)} meses",f"até {plabel(closure)}")
+with c[1]:
+    hist_range=f"{plabel(known.index.min())} a {plabel(known.index.max())}" if len(known) else "sem realizado"
+    card("Histórico disponível",f"{len(known)} meses realizados",hist_range)
 with c[2]: card("Lead time",f'{float(meta["lt_weeks"]):.0f} sem' if pd.notna(meta["lt_weeks"]) else "—")
 with c[3]: card("Cobertura target",f'{float(meta["cobertura"]):.0f} dias' if pd.notna(meta["cobertura"]) else "—")
 with c[4]: card("Janela crítica",f"{critical} meses" if critical else "—","LT + cobertura + 1 mês")
@@ -137,22 +139,30 @@ fig.add_vline(x=closure.to_timestamp(),line_dash="dash",line_color="#6b7280")
 fig.update_yaxes(title="Demanda")
 st.plotly_chart(layout(fig,330),use_container_width=True)
 
-st.markdown('<div class="section">2 · Modelos disponíveis naquele momento</div>',unsafe_allow_html=True)
-avail=[m for m in MODELS if model_available(m,len(known))]+["L'Oréal oficial"]
+st.markdown('<div class="section">2 · Modelos calculáveis e comparáveis naquele momento</div>',unsafe_allow_html=True)
+avail=[m for m in MODELS if model_available(m,len(known))]
 unavail=[m for m in MODELS if not model_available(m,len(known))]
-cols=st.columns(len(avail))
-req={"Naive":"1 mês","MM2":"2 meses","MM3":"3 meses","SES":"2 meses","Holt":"3 meses","L'Oréal oficial":"benchmark"}
-for col,m in zip(cols,avail):
+metric_n={r.modelo:int(r.n) for _,r in decision["metrics"].iterrows()} if not decision["metrics"].empty else {}
+cols=st.columns(len(avail)+1)
+req={"Naive":"1 mês","MM2":"2 meses","MM3":"3 meses","SES":"2 meses","Holt":"3 meses"}
+for col,m in zip(cols[:-1],avail):
     with col:
-        st.markdown(f'<div class="card"><div class="lab">{m}</div><div class="val" style="font-size:17px">DISPONÍVEL</div><div class="sub">mínimo: {req[m]}</div><span class="badge">{"benchmark" if m=="L’Oréal oficial" else "calculável"}</span></div>',unsafe_allow_html=True)
-if unavail: st.caption("Ainda indisponíveis por falta de histórico: "+", ".join(unavail)+".")
+        ncomp=metric_n.get(m,0)
+        status=f"COMPARÁVEL · n={ncomp}" if ncomp>0 else "AINDA NÃO COMPARÁVEL"
+        st.markdown(f'<div class="card"><div class="lab">{m}</div><div class="val" style="font-size:17px">CALCULÁVEL</div><div class="sub">mínimo: {req[m]}<br>{status}</div><span class="badge">{"avaliação disponível" if ncomp>0 else "avaliação limitada"}</span></div>',unsafe_allow_html=True)
+with cols[-1]:
+    bench_n=len(evaluated_until(audit,closure,"L'Oréal oficial",3))
+    st.markdown(f'<div class="card"><div class="lab">L’Oréal oficial</div><div class="val" style="font-size:17px">BENCHMARK</div><div class="sub">previsão oficial<br>erros conhecidos: n={bench_n}</div><span class="badge">benchmark</span></div>',unsafe_allow_html=True)
+if unavail: st.caption("Ainda não calculáveis por falta de histórico: "+", ".join(unavail)+".")
 
-st.markdown('<div class="section">3 · Modelo indicado neste fechamento</div>',unsafe_allow_html=True)
+st.markdown('<div class="section">3 · Menor MAE neste fechamento</div>',unsafe_allow_html=True)
 if decision["model"] is None:
-    st.markdown(f'<div class="choice bad"><div class="k">MODELO INDICADO NESTE FECHAMENTO</div><div class="m">AINDA NÃO HÁ HISTÓRICO SUFICIENTE PARA COMPARAÇÃO</div><div class="txt">{decision["message"]} O dashboard não força um vencedor com apenas uma observação isolada.</div></div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="choice bad"><div class="k">MODELO COM MENOR MAE NESTE FECHAMENTO</div><div class="m">AINDA NÃO HÁ HISTÓRICO SUFICIENTE PARA COMPARAÇÃO</div><div class="txt">{decision["message"]} O dashboard não força um vencedor com apenas uma observação isolada.</div></div>',unsafe_allow_html=True)
 else:
     note=f'<div class="note">{decision.get("note","")}</div>' if decision.get("note") else ""
-    st.markdown(f'<div class="choice"><div class="k">MODELO INDICADO NESTE FECHAMENTO</div><div class="m">{decision["model"]}</div><div class="txt">{decision["message"]}</div>{note}</div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="choice"><div class="k">MODELO COM MENOR MAE NESTE FECHAMENTO</div><div class="m">{decision["model"]}</div><div class="txt">{decision["message"]}</div>{note}</div>',unsafe_allow_html=True)
+    if pd.notna(decision.get("gap_abs",np.nan)):
+        st.caption(f'Diferença absoluta para o segundo menor MAE: {short(decision["gap_abs"])} un. Este valor é mostrado para transparência; não existe regra automática de troca por 5%, 10% ou outro limiar arbitrário.')
 
 idx=closures.index(closure)
 if idx>0:
@@ -203,9 +213,30 @@ else:
     st.plotly_chart(layout(fig,315,False),use_container_width=True)
     table=show[["modelo","MAE","Bias","n"]].rename(columns={"modelo":"Modelo","Bias":"Bias (realizado - previsto)"})
     st.dataframe(table,use_container_width=True,hide_index=True)
-    st.caption("MAE é o critério principal. Bias, estabilidade entre horizontes, n e simplicidade são diagnósticos; não há score ponderado arbitrário.")
+    st.caption("MAE é o critério principal. Bias, estabilidade entre horizontes e n são diagnósticos. O dashboard não usa score ponderado nem regra arbitrária de troca por 5% ou 10%.")
 
-st.markdown('<div class="section">5 · Erros do modelo selecionado até este mês</div>',unsafe_allow_html=True)
+    ev=evaluated_until(audit,closure,max_h=3)
+    comp_models=list(show.modelo)
+    keysets=[]
+    for m in comp_models:
+        s=ev[ev.modelo.eq(m)]
+        keysets.append(set(zip(s.origem_previsao,s.mes_alvo,s.horizonte)))
+    common_keys=set.intersection(*keysets) if keysets else set()
+    used=ev[ev.modelo.eq(decision["model"])].copy()
+    if common_keys:
+        used=used[[tuple(x) in common_keys for x in zip(used.origem_previsao,used.mes_alvo,used.horizonte)]]
+    used=used.sort_values(["origem_previsao","horizonte"])
+    with st.expander(f'Ver os {len(used)} erros usados nesta decisão'):
+        if len(used):
+            t=used[["origem_previsao","mes_alvo","horizonte","previsto","realizado","erro"]].copy()
+            t["origem_previsao"]=t["origem_previsao"].map(plabel)
+            t["mes_alvo"]=t["mes_alvo"].map(plabel)
+            t=t.rename(columns={"origem_previsao":"Origem","mes_alvo":"Mês previsto","horizonte":"Horizonte","previsto":"Previsto","realizado":"Realizado","erro":"Erro"})
+            st.dataframe(t,use_container_width=True,hide_index=True)
+        else:
+            st.info("Ainda não há erros comparáveis para abrir.")
+
+st.markdown('<div class="section">5 · Erros M-1 conhecidos do modelo selecionado até este fechamento</div>',unsafe_allow_html=True)
 if decision["model"]:
     err=evaluated_until(audit,closure,decision["model"],1).sort_values("mes_alvo")
     if len(err):
@@ -220,7 +251,7 @@ if decision["model"]:
     else: st.info("O modelo pode ser calculado, mas ainda não existe erro M-1 realizado para medi-lo.")
 else: st.info("Os resíduos aparecerão quando houver histórico suficiente para selecionar um modelo.")
 
-st.markdown('<div class="section">6 · Como a escolha do modelo mudou com o tempo?</div>',unsafe_allow_html=True)
+st.markdown('<div class="section">6 · Como o modelo com menor MAE mudou com o tempo?</div>',unsafe_allow_html=True)
 mat=maturity_history(audit,realized,closures)
 fig=go.Figure(go.Scatter(x=[p.to_timestamp() for p in mat.fechamento],y=mat.modelo,mode="lines+markers+text",text=mat.modelo,textposition="top center",
                          line=dict(color="#5b9cff",width=2),marker=dict(size=10,color="#f4c21f"),
@@ -289,7 +320,7 @@ with st.expander("Regra de seleção e tabela de auditoria"):
 3. Um erro só entra depois que o realizado do mês-alvo existe.
 4. A seleção usa MAE em observações compatíveis entre os modelos elegíveis, nos horizontes M-1 a M-3.
 5. É preciso haver pelo menos 2 erros compatíveis e 2 modelos comparáveis. Caso contrário, não há vencedor.
-6. Quando a amostra é pequena e os MAEs estão praticamente empatados (até 5%), vale a parcimônia: o modelo mais simples entre os empatados é preferido.
+6. O dashboard não usa regra arbitrária de troca por 5%, 10% ou outro percentual. Ele mostra qual modelo tem o menor MAE naquele fechamento e sinaliza quando a amostra ainda é limitada.
 7. A previsão oficial L'Oréal é benchmark, não candidato automático à seleção.
 """)
     view=audit[audit.origem_previsao<=closure].copy().sort_values(["origem_previsao","modelo","horizonte"])
