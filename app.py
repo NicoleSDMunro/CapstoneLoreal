@@ -62,7 +62,7 @@ DEFAULT=Path(__file__).with_name("Base de Dados - PUC (2).xlsx")
 with st.sidebar:
     st.header("Base de dados")
     up=st.file_uploader("Suba a base Excel",type=["xlsx"])
-    st.caption("A estrutura esperada é a mesma da base do TCC: Base, BOM e abas A–P.")
+    st.caption("Dashboard exclusivo do SKU L. A base precisa conter as abas Base, BOM e L.")
 source=up if up is not None else (DEFAULT if DEFAULT.exists() else None)
 if source is None:
     st.markdown('<div class="panel"><b>Envie a base Excel no menu lateral.</b><br><span style="color:#9ca3af">Assim que o arquivo for carregado, o dashboard monta automaticamente toda a Etapa 2.</span></div>',unsafe_allow_html=True)
@@ -71,11 +71,15 @@ if source is None:
 try:
     xls=pd.ExcelFile(source)
     base=read_base_table(xls); bom=read_bom(xls)
-    products=sorted([str(s).strip().upper() for s in xls.sheet_names if re.fullmatch(r"[A-Pa-p]",str(s).strip())])
+    sheets={str(s).strip().upper() for s in xls.sheet_names}
 except Exception as e:
     st.error("Não foi possível abrir a base."); st.code(str(e)); st.stop()
 
-product=st.selectbox("Produto",products,index=products.index("L") if "L" in products else 0)
+product="L"
+if product not in sheets:
+    st.error("A base enviada não contém a aba do SKU L.")
+    st.stop()
+st.markdown('<div class="panel"><div class="lab">SKU analisado</div><div class="val">PRODUTO L</div><div class="sub">Dashboard exclusivo da Etapa 2 para o SKU L.</div></div>',unsafe_allow_html=True)
 try:
     matrix=parse_pv_sheet(xls,product)
     realized=realized_from_matrix(matrix)
