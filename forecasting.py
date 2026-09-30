@@ -129,18 +129,18 @@ def build_audit(matrix,realized,max_h=14):
         # Na versão/origem t, o realizado de t ainda não existe.
         # Só são conhecidos realizados estritamente anteriores à origem.
         hist=realized[realized.index<origin]
-        if len(hist)==0: continue
-        for model in MODELS:
-            if not model_available(model,len(hist)): continue
-            pred=forecast_model(model,hist.values,max_h)
-            if pred is None: continue
-            for h,v in enumerate(pred,1):
-                target=origin+h
-                actual=float(realized[target]) if target in realized.index else np.nan
-                rows.append({"fechamento":origin,"modelo":model,"origem_previsao":origin,"horizonte":h,
-                             "mes_alvo":target,"previsto":float(v),"realizado":actual,
-                             "erro":actual-float(v) if pd.notna(actual) else np.nan,
-                             "benchmark":False,"n_historico_origem":len(hist)})
+        if len(hist)>0:
+            for model in MODELS:
+                if not model_available(model,len(hist)): continue
+                pred=forecast_model(model,hist.values,max_h)
+                if pred is None: continue
+                for h,v in enumerate(pred,1):
+                    target=origin+h
+                    actual=float(realized[target]) if target in realized.index else np.nan
+                    rows.append({"fechamento":origin,"modelo":model,"origem_previsao":origin,"horizonte":h,
+                                 "mes_alvo":target,"previsto":float(v),"realizado":actual,
+                                 "erro":actual-float(v) if pd.notna(actual) else np.nan,
+                                 "benchmark":False,"n_historico_origem":len(hist)})
         for target in matrix.columns:
             if target<=origin: continue
             v=matrix.loc[origin,target]
