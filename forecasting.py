@@ -7,11 +7,9 @@ from statsmodels.tsa.holtwinters import Holt, SimpleExpSmoothing
 MONTHS_PT={1:"jan",2:"fev",3:"mar",4:"abr",5:"mai",6:"jun",7:"jul",8:"ago",9:"set",10:"out",11:"nov",12:"dez"}
 MONTH_NUM={v:k for k,v in MONTHS_PT.items()}
 MODELS=["Naive","MM2","SES","MM3","Holt"]
-SIMPLICITY={"Naive":0,"MM2":1,"SES":2,"MM3":3,"Holt":4}
 HORIZONS=[1,2,3]
 MIN_ERRORS=2
 SMALL_N=4
-TIE_TOL=.05
 
 def as_period(value):
     if isinstance(value,pd.Period): return value.asfreq("M")
@@ -180,23 +178,20 @@ def choose_model(audit,closure):
     metrics,candidates,n=compatible_metrics(audit,closure)
     if metrics.empty or n<MIN_ERRORS:
         return {"model":None,"status":"insufficient","message":"Ainda não há histórico suficiente para comparar modelos de forma coerente.","metrics":metrics,"common_n":n}
-    ranked=metrics.sort_values("MAE").copy()
-    best=ranked.iloc[0]; second=ranked.iloc[1] if len(ranked)>1 else None
-    model=best.modelo; close=False
-    if second is not None and best.MAE>0: close=(second.MAE-best.MAE)/best.MAE<=TIE_TOL
-    note=""
-    if n<SMALL_N and close:
-        tied=ranked[ranked.MAE<=best.MAE*(1+TIE_TOL)]
-        model=min(tied.modelo,key=lambda m:SIMPLICITY[m])
-        note="A diferença de MAE é pequena e a amostra ainda é limitada; a parcimônia favorece o modelo mais simples entre os praticamente empatados."
-    elif n<SMALL_N:
-        note="A indicação é provisória porque a amostra de erros ainda é pequena."
-    elif close:
-        note="O menor MAE está muito próximo do segundo colocado; interprete a diferença com cautela."
-    mae=float(metrics.loc[metrics.modelo.eq(model),"MAE"].iloc[0])
+    ranked=metrics.sort_values(["MAE","modelo"]).copy()
+    best=ranked.iloc[0]
+    model=best.modelo
+    mae=float(best.MAE)
+    second_mae=float(ranked.iloc[1].MAE) if len(ranked)>1 else np.nan
+    gap_abs=(second_mae-mae) if pd.notna(second_mae) else np.nan
+
+    # Não existe regra arbitrária de troca por 5%, 10% etc.
+    # O dashboard mostra o menor MAE observado e separa isso de uma conclusão operacional.
+    note="Amostra ainda limitada: o ranking é descritivo e não deve ser interpretado, sozinho, como evidência robusta de superioridade." if n<SMALL_N else ""
     return {"model":model,"status":"provisional" if n<SMALL_N else "selected",
             "message":f"Com os dados disponíveis até {plabel(closure)}, {model} apresenta o menor MAE comparável entre os modelos avaliáveis.",
-            "note":note,"metrics":metrics,"common_n":n,"mae":mae}
+            "note":note,"metrics":metrics,"common_n":n,"mae":mae,
+            "second_mae":second_mae,"gap_abs":gap_abs}
 
 def horizon_metrics(audit,closure):
     ev=evaluated_until(audit,closure,max_h=3); rows=[]
