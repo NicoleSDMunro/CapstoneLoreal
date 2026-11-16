@@ -14,7 +14,8 @@ from forecasting import plabel, product_meta
 from smartlaunch_core import (read_triangle, available_analogs, realized,
     planned_launch, rolling_audit, rank_models, candidate, forecast_path,
     forecast_residuals, monte_carlo, production_plan, opening_stock,
-    metrics, critical_window, actionable_lots, compare_alternative)
+    metrics, critical_window, actionable_lots, compare_alternative,
+    benchmark_log_errors, scenarios_from_benchmarks)
 
 st.set_page_config(page_title="Smart Launch | Decision Center",
                    page_icon="📊",layout="wide",initial_sidebar_state="expanded")
@@ -192,6 +193,12 @@ if pred is None and manual.startswith("Automatic"):
 official=candidate(groups,product,analogs,closure,launch,"Oficial",horizon)
 errs=forecast_residuals(audit,chosen)
 scenarios=monte_carlo(pred,errs,n=1000,distribution=distribution)
+scenario_source="Own-product rolling errors" if scenarios is not None else "Unavailable"
+if scenarios is None and pred is not None and analogs:
+    benchmark_errors=benchmark_log_errors(groups,analogs,closure)
+    scenarios=scenarios_from_benchmarks(pred,benchmark_errors,n=1000)
+    if scenarios is not None:
+        scenario_source="Exploratory cross-benchmark log-normal errors"
 initial=opening_stock(grp,closure)
 receipts=production_plan(grp,closure,future)
 with st.sidebar:
@@ -209,7 +216,7 @@ with st.sidebar:
             receipts=np.maximum(pd.to_numeric(df_out["Production"],errors="coerce").fillna(0).to_numpy(),0)
             st.caption("Manual production replaces missing PP data for this scenario.")
     if scenarios is None:
-        st.caption("Probabilistic analysis needs at least two known forecast errors. No probability is fabricated.")
+        st.caption("Requires at least two known forecast errors or cross-benchmark log errors. Probabilities are not fabricated.")
 
 window=critical_window(lead_weeks,cover_target,horizon)
 calc=metrics(initial,receipts,scenarios,limit,window) if (
@@ -406,7 +413,7 @@ with c2:
         ("Temporal integrity","Previous planning versions and realized months only"),
         ("Forecast model",chosen),
         ("Historical errors",str(len(errs))+" realized origin–target records"),
-        ("Uncertainty",distribution+" · 1,000 scenarios" if scenarios is not None else "Not estimable"),
+        ("Uncertainty",scenario_source+" · 1,000 scenarios" if scenarios is not None else "Not estimable"),
         ("Inventory source","Triângulo PE or explicit manual scenario" if initial is not None else "Missing"),
         ("Production source","Triângulo PP or explicit manual scenario" if receipts is not None else "Missing"),
         ("Decision deadline","Supplier lead time, planning version and monthly receipt"),
@@ -424,7 +431,7 @@ per origin; the dashboard uses historical MAPE on comparable origin–target pai
 **Uncertainty.** Main scenario uses 1,000 demand trajectories, normally distributed errors
 with mean zero and observed sample standard deviation, clipped at zero. Centered bootstrap
 is a sensitivity option. Overlapping errors do not represent independent observations.
-Before enough errors exist, probabilities are deliberately unavailable.
+Before enough own errors exist, exploratory cross-benchmark log-error scenarios may be used when two or more cross-benchmark residuals can be constructed; otherwise probabilities are unavailable.
 
 **Inventory and risk.** Stock is updated by opening inventory plus planned receipts minus
 satisfied demand, recording lost sales separately. Forward cover consumes later months in
@@ -459,7 +466,7 @@ with pd.ExcelWriter(out,engine="openpyxl") as writer:
     if not export_risk.empty:export_risk.to_excel(writer,sheet_name="Risk Monitor",index=False)
     if alternatives:pd.DataFrame(alternatives).to_excel(writer,sheet_name="Lot Alternatives",index=False)
     pd.DataFrame([{"Product":product,"Closing":plabel(closure),"Model":chosen,
-                 "Scenario distribution":distribution,"Excess threshold":limit,
+                 "Scenario distribution":scenario_source,"Excess threshold":limit,
                  "Alert threshold":attention/100,"Lead time weeks":lead_weeks,
                  "Critical window months":window,"Scenario count":1000 if scenarios is not None else 0,
                  "Evidence":"Conditional; planner review required"}]).to_excel(writer,sheet_name="Audit inputs",index=False)
