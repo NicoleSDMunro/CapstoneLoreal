@@ -447,3 +447,23 @@ def scenarios_from_benchmarks(forecast,log_errors,n=1000,seed=20261021):
     rng=np.random.default_rng(seed)
     errors=rng.normal(0.0,std,size=(n,len(forecast)))
     return np.maximum(forecast[None,:]*np.exp(np.clip(errors,-10,10)),0)
+
+
+def compare_reschedule(base,initial,receipts,demand,index,new_index,limit,window):
+    """Move a single lot to an eligible future month; use exactly the same demand draws."""
+    if new_index<0 or new_index>=len(receipts) or new_index==index:
+        raise ValueError("Lot destination outside the projected horizon")
+    mod=np.array(receipts,dtype=float).copy()
+    amount=mod[index]
+    mod[index]=0
+    mod[new_index]+=amount
+    test=metrics(initial,mod,demand,limit,window)
+    old=base["stockout_risk"]
+    new=test["stockout_risk"]
+    admissible=not (np.any((old<=0.025)&(new>0.025)) or
+                    np.any((new-old)>0.025+1e-10))
+    return {"excess_avoided":base["excess_worst"]-test["excess_worst"],
+            "lost_extra":test["lost_mean"]-base["lost_mean"],
+            "fill":test["fill_rate"],"stockout_risk":float(np.max(new)),
+            "excess_risk":float(np.max(test["excess_risk"])),
+            "admissible":admissible,"test":test}
