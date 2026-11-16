@@ -1,0 +1,24 @@
+name: Validar painel Smart Launch
+on:
+  push:
+    branches: [main, feature/smartlaunch-metodologia-final, feature/painel-4-areas]
+  pull_request:
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m py_compile app.py smartlaunch_app.py smartlaunch_core.py smartlaunch_ui.py smartlaunch_monthly.py smartlaunch_validation.py smartlaunch_priority.py smartlaunch_impact.py smartlaunch_visuals.py
+      - run: PYTHONPATH=. python tests/test_impact.py
+      - run: PYTHONPATH=. python tests/test_priority_cards.py
+      - run: PYTHONPATH=. python tests/test_historical_validation.py
+      - run: PYTHONPATH=. python tests/test_early_closure.py
+      - run: PYTHONPATH=. python tests/test_alert_rules.py
+      - run: PYTHONPATH=. python tests/test_monthly.py
+      - run: PYTHONPATH=. python tests/test_smoke.py
+      - run: PYTHONPATH=. python tests/test_visuals.py
+      - run: PYTHONPATH=. python tests/test_ui.py
