@@ -195,9 +195,9 @@ if available_horizon==0:
     st.stop()
 horizon=min(requested_horizon,available_horizon)
 if horizon<requested_horizon:
-    st.info(f"The workbook contains {available_horizon} complete planning months after {plabel(closure)}. "
+    st.info(f"The workbook contains {available_horizon} complete planning months starting with {plabel(closure)}. "
             f"Analysis was limited to {horizon} months instead of {requested_horizon}; no future months were invented.")
-future=[closure+i for i in range(1,horizon+1)]
+future=[closure+i for i in range(horizon)]
 pred=forecast_path(groups,product,analogs,closure,launch,chosen,horizon)
 if pred is None and manual.startswith("Automatic"):
     for fallback in ["MEA","Oficial"]:
@@ -220,9 +220,9 @@ with st.sidebar:
     st.divider()
     st.markdown("**03 / OPTIONAL OPERATIONAL INPUTS**")
     if initial is None:
-        if st.checkbox("Enter closing inventory (scenario assumption)",value=False):
+        if st.checkbox("Enter previous-month closing inventory (scenario assumption)",value=False):
             initial=st.number_input("Closing inventory (units)",min_value=0.0,value=0.0,step=1000.0)
-            st.caption("Not taken from PE; manually supplied for this scenario.")
+            st.caption("Manually supplied opening inventory at the end of the month before the selected version.")
     if receipts is None:
         if st.checkbox("Enter planned production (scenario assumption)",value=False):
             df_in=pd.DataFrame({"Month":[plabel(m) for m in future],"Production":[0.0]*len(future)})
