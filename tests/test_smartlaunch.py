@@ -6,12 +6,55 @@ from smartlaunch_core import (
     month, parse_matrix, Matrices, forward_cover, simulate_inventory,
     metrics, critical_window, deadline, actionable_lots, compare_alternative,
     analog_forecast, monte_carlo, benchmark_log_errors, compare_reschedule,
+    detect_blocks, available_plan_horizon, canonical_product, available_analogs, planned_launch,
 )
 
 def p(value):
     return pd.Period(value,freq="M")
 
 class TestSmartLaunch(unittest.TestCase):
+    def test_product_name_alias_and_benchmarks(self):
+        self.assertEqual(canonical_product("PRODUTO 1"),"P1")
+        self.assertEqual(canonical_product("P1"),"P1")
+        self.assertEqual(canonical_product("Produto 3"),"P3")
+        groups={"PRODUTO 1":Matrices(pd.DataFrame([[5.0]],index=[p("2025-11")],columns=[p("2025-12")])),
+                "Benchmark A":Matrices(pd.DataFrame([[5.0]],index=[p("2025-11")],columns=[p("2025-12")])),
+                "B_1":Matrices(pd.DataFrame([[5.0]],index=[p("2025-11")],columns=[p("2025-12")]))}
+        self.assertEqual(available_analogs("PRODUTO 1",groups),["Benchmark A","B_1"])
+
+    def test_multi_block_portuguese_triangle(self):
+        raw=pd.DataFrame([
+            ["PV (SELL IN)","", "", ""],
+            ["Mes/Ano","nov/2025","dez/2025","jan/2026"],
+            ["nov/2025",11,12,13],
+            ["dez/2025",11,15,17],
+            ["PLANO DE PRODUÇÃO FÁBRICA","","",""],
+            ["Mes/Ano","nov/2025","dez/2025","jan/2026"],
+            ["nov/2025",40,50,60],
+            ["dez/2025",40,52,62],
+            ["ESTOQUE","","",""],
+            ["Mes/Ano","nov/2025","dez/2025","jan/2026"],
+            ["nov/2025",90,100,110],
+            ["dez/2025",90,95,106]
+        ])
+        blocks=detect_blocks(raw)
+        self.assertEqual(set(blocks),{"PV","PP","PE"})
+        self.assertEqual(blocks["PP"].loc[p("2025-11"),p("2025-12")],50.)
+        self.assertEqual(blocks["PE"].loc[p("2025-12"),p("2025-12")],95.)
+
+    def test_planning_horizon_does_not_exceed_last_month(self):
+        months=[p("2026-07")]+[p("2026-07")+i for i in range(1,6)]
+        mat=pd.DataFrame([[1.0]*len(months)],index=[p("2026-07")],columns=months)
+        self.assertEqual(available_plan_horizon(Matrices(mat),p("2026-07")),5)
+
+    def test_launch_not_reset_at_last_closing(self):
+        columns=[p("2025-11"),p("2025-12"),p("2026-01"),p("2026-02")]
+        versions=[p("2025-11"),p("2025-12"),p("2026-01"),p("2026-02")]
+        mat=pd.DataFrame([[0.,200.,160.,100.],[0.,200.,160.,100.],
+                          [0.,180.,160.,100.],[0.,180.,150.,100.]],
+                         index=versions,columns=columns)
+        self.assertEqual(planned_launch(mat,p("2026-02")),p("2025-12"))
+
     def test_months(self):
         self.assertEqual(month("jun/26"),p("2026-06"))
         self.assertEqual(month("2026-10"),p("2026-10"))
