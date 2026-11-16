@@ -7,6 +7,7 @@ from smartlaunch_core import (
     metrics, critical_window, deadline, actionable_lots, compare_alternative,
     analog_forecast, monte_carlo, benchmark_log_errors, compare_reschedule,
     detect_blocks, available_plan_horizon, canonical_product, available_analogs, planned_launch,
+    opening_stock, candidate,
 )
 
 def p(value):
@@ -45,7 +46,18 @@ class TestSmartLaunch(unittest.TestCase):
     def test_planning_horizon_does_not_exceed_last_month(self):
         months=[p("2026-07")]+[p("2026-07")+i for i in range(1,6)]
         mat=pd.DataFrame([[1.0]*len(months)],index=[p("2026-07")],columns=months)
-        self.assertEqual(available_plan_horizon(Matrices(mat),p("2026-07")),5)
+        self.assertEqual(available_plan_horizon(Matrices(mat),p("2026-07")),6)
+
+    def test_july_version_forecasts_july_and_uses_june_stock(self):
+        cols=[p("2026-06"),p("2026-07"),p("2026-08")]
+        versions=[p("2026-06"),p("2026-07")]
+        pv=pd.DataFrame([[70.,80.,90.],[72.,82.,92.]],index=versions,columns=cols)
+        pe=pd.DataFrame([[500.,480.,460.],[510.,490.,470.]],index=versions,columns=cols)
+        group=Matrices(pv,pe=pe)
+        self.assertEqual(opening_stock(group,p("2026-07")),510.)
+        forecast=candidate({"PRODUTO 1":group},"PRODUTO 1",[],p("2026-07"),None,"Oficial",2)
+        self.assertAlmostEqual(forecast[0],82.)
+        self.assertAlmostEqual(forecast[1],92.)
 
     def test_launch_not_reset_at_last_closing(self):
         columns=[p("2025-11"),p("2025-12"),p("2026-01"),p("2026-02")]
