@@ -1,540 +1,309 @@
-"""Smart Launch decision engine.
-
-This module separates scientific calculations from the Streamlit presentation.
-Inputs are planning versions; risks are conditional, not validated probabilities.
-"""
-from dataclasses import dataclass
+"""Motor analítico Smart Launch: extraído da aplicação anterior sem alteração das regras."""
+import io
 import math
 import re
-import unicodedata
-from datetime import timedelta
+import zlib
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+import openpyxl
+from smartlaunch_monthly import evaluate_models
 
-from forecasting import (MODELS, as_period, forecast_model,
-                         realized_from_matrix, product_meta, read_base_table, read_bom)
 
-MONTHS = {"jan":1,"fev":2,"mar":3,"abr":4,"mai":5,"jun":6,"jul":7,
-          "ago":8,"set":9,"out":10,"nov":11,"dez":12,
-          "feb":2,"apr":4,"may":5,"aug":8,"sep":9,"oct":10,"dec":12}
+MONTHS={"jan":1,"fev":2,"mar":3,"abr":4,"mai":5,"jun":6,"jul":7,"ago":8,"set":9,"out":10,"nov":11,"dez":12}
+NAMES={v:k for k,v in MONTHS.items()}
+MODEL={"P1":"MEA-P","P2":"MEA","P3":"Oficial"}
+ANALOG={"P1":["BENCH A_1","BENCH B_1"],"P2":["BENCH C_2"],"P3":["BENCH D_3","BENCH E_3"]}
+SHEETS={"P1":"PRODUTO 1","P2":"PRODUTO 2","P3":"PRODUTO 3"}
+SEED=20261021
+N=1000
+LIM=180
+# O ZIP do TCC usa dois níveis distintos: aviso e alerta para tomada de decisão.
+AVISO=0.025
+ALERTA=0.20
+# Margem aproximada de simulação Monte Carlo com 1.000 trajetórias; não mede
+# incerteza total do modelo.
+MARGEM_MC=0.025
+AUMENTO_MAX_RUPTURA=0.025
+CHAVE_SORTEIO={"MEA-P":"3C-P · 3C com índice de pipe","MEA":"3C","Oficial":"Oficial"}
 
-def month(value):
-    if isinstance(value, pd.Period):
-        return value.asfreq("M")
-    if isinstance(value, (pd.Timestamp, __import__("datetime").datetime)):
-        return pd.Period(value, freq="M")
-    if pd.isna(value):
-        return None
-    result=as_period(value)
-    if result is not None:
-        return result
-    s=str(value).strip().lower()
-    try:
-        if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}",s):
-            return pd.Period(pd.Timestamp(s),freq="M")
-        if re.fullmatch(r"\d{4}[-/]\d{1,2}",s):
-            return pd.Period(s.replace("/","-"),freq="M")
-        if re.fullmatch(r"\d{1,2}[-/]\d{4}",s):
-            a,b=re.split(r"[-/]",s)
-            return pd.Period(year=int(b),month=int(a),freq="M")
-        if re.fullmatch(r"[a-z]{3}[-/ ]\d{2,4}",s):
-            p=s[:3]; y=int(re.findall(r"\d+",s)[0])
-            if p in MONTHS: return pd.Period(year=2000+y if y<100 else y,month=MONTHS[p],freq="M")
-    except (ValueError,TypeError):
-        pass
-    return None
 
-def normalize(v):
-    s=unicodedata.normalize("NFKD",str(v).lower())
-    return "".join(c for c in s if not unicodedata.combining(c)).strip()
+def nivel(p):
+    """Separa alerta (>20%), aviso (>2,5%) e não avaliado."""
+    if p is None or not np.isfinite(p):
+        return "não avaliado"
+    return "alerta" if p>ALERTA else "aviso" if p>AVISO else "—"
 
-@dataclass
-class Matrices:
-    pv: pd.DataFrame
-    pp: pd.DataFrame | None = None
-    pe: pd.DataFrame | None = None
 
-def parse_matrix(raw):
-    """Read version x target-month matrix with a repeated Portuguese or Excel month header."""
-    header=None
-    for i in range(min(len(raw),22)):
-        periods=[month(v) for v in raw.iloc[i].tolist()]
-        if len([v for v in periods if v is not None]) >= 3:
-            header=i
-            break
-    if header is None:
-        raise ValueError("Nenhum cabeçalho de meses encontrado")
-    columns=[(j,month(v)) for j,v in enumerate(raw.iloc[header].tolist())
-             if month(v) is not None]
-    left=columns[0][0]
-    records=[]
-    for i in range(header+1,len(raw)):
-        version=None
-        for j in range(max(0,left-3),left):
-            parsed=month(raw.iat[i,j])
-            if parsed is not None:
-                version=parsed
-        if version is None:
-            if records: break
+def chance_txt(p):
+    """Exibe chances simuladas sem casas decimais excessivamente precisas."""
+    if p is None or not np.isfinite(p):
+        return "não avaliado"
+    v=100*p
+    if v<1: return "< 1%"
+    if v>99: return "> 99%"
+    return f"{v:.0f}%"
+
+def period(v):
+    if isinstance(v,pd.Period): return v
+    if isinstance(v,pd.Timestamp): return v.to_period("M")
+    s=str(v).strip().lower()
+    m=re.match(r"^(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s*[/ -]\s*(20\d{2}|\d{2})$",s)
+    if not m:return None
+    y=int(m.group(2))
+    return pd.Period(year=2000+y if y<100 else y,month=MONTHS[m.group(1)],freq="M")
+
+def label(p):
+    return f"{NAMES[p.month]}/{str(p.year)[-2:]}"
+
+def parse_blocks(ws):
+    """Layout original: títulos PV / PRODUÇÃO / ESTOQUE e linha Mes/Ano antes de cada triângulo."""
+    blocks={}; kind=None; header={}
+    for row in ws.iter_rows(values_only=True):
+        first=row[0] if row else None
+        p=period(first)
+        if isinstance(first,str) and p is None:
+            s=first.strip().upper()
+            if "ESTOQUE" in s:kind="EST"
+            elif "PRODU" in s:kind="PROD"
+            elif s.startswith("PV"):kind="PV"
+            if kind and ("ESTOQUE" in s or "PRODU" in s or s.startswith("PV")):
+                blocks.setdefault(kind,{})
+            if s=="MES/ANO":
+                parsed={j:period(x) for j,x in enumerate(row) if period(x) is not None}
+                # A linha seguinte também se chama Mes/Ano, mas traz descrições.
+                # Não apagar os meses do cabeçalho válido.
+                if parsed: header=parsed
             continue
-        record={"_versao":version}
-        for j,p in columns:
-            value=pd.to_numeric(raw.iat[i,j],errors="coerce")
-            if pd.notna(value): record[p]=float(value)
-        records.append(record)
-    if not records:
-        raise ValueError("Matriz sem linhas de versões")
-    df=pd.DataFrame(records).drop_duplicates("_versao",keep="last").set_index("_versao").sort_index()
-    df=df.reindex(sorted([c for c in df if isinstance(c,pd.Period)]),axis=1)
-    df.columns=pd.PeriodIndex(df.columns,freq="M")
-    return df.astype(float)
+        if p is not None and kind and header:
+            blocks[kind][p]={m:float(row[j] or 0) for j,m in header.items() if j<len(row) and isinstance(row[j],(int,float))}
+    return {key:pd.DataFrame.from_dict(v,orient="index").sort_index() for key,v in blocks.items()}
 
-def detect_blocks(raw):
-    """Detect explicit PV/PP/PE blocks on a per-product worksheet."""
-    found={}
-    markers={"PV":("pv","plano de vendas","previsao de vendas","sales plan"),
-             "PP":("pp","plano de producao","producao planejada","production plan","producao"),
-             "PE":("pe","plano de estoque","estoque projetado","inventory plan","estoque")}
-    starts=[]
-    for i in range(len(raw)):
-        snippets=[normalize(x) for x in raw.iloc[i,:min(5,raw.shape[1])].tolist() if pd.notna(x)]
-        for kind,values in markers.items():
-            if any(s==v or s.startswith(v+" ") or s.startswith(v+"(") or
-                   s.startswith(v+" (") or s.startswith(v+":") for s in snippets for v in values):
-                starts.append((i,kind))
-                break
-    for idx,(start,kind) in enumerate(starts):
-        end=starts[idx+1][0] if idx+1<len(starts) else len(raw)
-        try:
-            found[kind]=parse_matrix(raw.iloc[start:end].reset_index(drop=True))
-        except ValueError:
-            continue
-    return found
+def read_base(wb):
+    if "Base" not in wb.sheetnames:raise ValueError('Arquivo incompatível: falta a aba "Base". Envie o Triangulo_Produtos_V2.xlsx da metodologia final, não a base antiga A–P.')
+    rows=list(wb["Base"].values)
+    for row in rows:
+        cells=[str(x).strip().lower() if x is not None else "" for x in row]
+        if "produto" in cells and any("cobertura" in x for x in cells):
+            ip=cells.index("produto")
+            ic=next(i for i,x in enumerate(cells) if "cobertura" in x)
+            il=next((i for i,x in enumerate(cells) if "lt" in x),None)
+            if il is None:continue
+            result={}
+            for r in rows[rows.index(row)+1:]:
+                raw=str(r[ip]).strip() if ip<len(r) else ""
+                key="P"+raw.replace("P","").replace(".0","")
+                if key in MODEL and isinstance(r[ic],(float,int)) and isinstance(r[il],(float,int)):
+                    result[key]=(float(r[ic]),float(r[il]))
+            if result:return result
+    raise ValueError("Não foi possível encontrar LT e cobertura por produto na aba Base.")
 
-def long_format_matrix(df):
-    names={normalize(col):col for col in df.columns}
-    def choose(*opts):
-        for key in opts:
-            if key in names: return names[key]
-        return None
-    sku=choose("produto","sku","product")
-    version=choose("fechamento","versao","versao do plano","closing")
-    target=choose("mes alvo","mes_alvo","mes","target","target month")
-    value=choose("valor","volume","quantidade","value")
-    if not all(x is not None for x in [sku,version,target,value]):
-        return {}
-    rows=df[[sku,version,target,value]].copy()
-    rows.columns=["sku","version","target","value"]
-    rows["version"]=rows["version"].map(month)
-    rows["target"]=rows["target"].map(month)
-    rows["value"]=pd.to_numeric(rows["value"],errors="coerce")
-    rows=rows.dropna(subset=["sku","version","target","value"])
-    result={}
-    for prod,g in rows.groupby("sku"):
-        g=g.drop_duplicates(["version","target"],keep="last")
-        result[str(prod).strip()]=g.pivot(index="version",columns="target",values="value").sort_index()
-    return result
+def discover_products(wb):
+    """Descobre todos os SKUs pelo nome das abas; mantém as escolhas históricas P1–P3."""
+    discovered = {}
+    for sheet in wb.sheetnames:
+        match = re.fullmatch(r"PRODUTO\s+(\d+)", sheet.strip(), flags=re.IGNORECASE)
+        if match:
+            product = "P" + str(int(match.group(1)))
+            discovered[product] = sheet
+    if not discovered:
+        raise ValueError("Nenhuma aba PRODUTO N encontrada na planilha.")
+    ordered = sorted(discovered, key=lambda p: int(p[1:]))
+    new_analog = {}
+    for product in ordered:
+        suffix = product[1:]
+        new_analog[product] = sorted(
+            name for name in wb.sheetnames
+            if re.fullmatch(r"BENCH\s+.+_" + re.escape(suffix), name.strip(), flags=re.IGNORECASE)
+        )
+    previous_models = dict(MODEL)
+    SHEETS.clear()
+    SHEETS.update({p: discovered[p] for p in ordered})
+    ANALOG.clear()
+    ANALOG.update(new_analog)
+    MODEL.clear()
+    MODEL.update({p: previous_models.get(p, "MEA" if new_analog[p] else "Oficial")
+                  for p in ordered})
 
-def read_triangle(source):
-    """Supported layouts: product worksheets containing PV/PP/PE blocks;
-    product-specific *_PV/*_PP/*_PE; or normalized PV/PP/PE long-format tabs.
-    Older PV-only files are admitted but their decision metrics stay unavailable.
-    """
-    xls=pd.ExcelFile(source)
-    sheets={normalize(s):s for s in xls.sheet_names}
-    groups={}
-    reserved={"base","bom","readme","instrucoes","parametros","analogs","analogos"}
-    typed={}
-    for sheet in xls.sheet_names:
-        low=normalize(sheet)
-        m=re.match(r"(.+?)[ _-]+(pv|pp|pe)$",low,re.I)
-        if m:
-            typed.setdefault(m.group(1).upper(),{})[m.group(2).upper()]=sheet
-    for sku,parts in typed.items():
-        blocks={}
-        for kind,sheet in parts.items():
-            raw=pd.read_excel(xls,sheet_name=sheet,header=None)
-            try: blocks[kind]=parse_matrix(raw)
-            except ValueError: pass
-        if "PV" in blocks: groups[sku]=Matrices(blocks["PV"],blocks.get("PP"),blocks.get("PE"))
-    for kind in ("pv","pp","pe"):
-        if kind in sheets:
-            df=pd.read_excel(xls,sheet_name=sheets[kind])
-            for sku,mat in long_format_matrix(df).items():
-                if sku not in groups: groups[sku]=Matrices(pd.DataFrame())
-                setattr(groups[sku],kind,mat)
-    for sheet in xls.sheet_names:
-        low=normalize(sheet)
-        if low in reserved or low in ("pv","pp","pe") or any(sheet in v.values() for v in typed.values()):
-            continue
-        if sheet in groups: continue
-        raw=pd.read_excel(xls,sheet_name=sheet,header=None)
-        blocks=detect_blocks(raw)
-        if "PV" not in blocks:
-            try: blocks["PV"]=parse_matrix(raw)
-            except ValueError: continue
-        groups[sheet]=Matrices(blocks["PV"],blocks.get("PP"),blocks.get("PE"))
-    groups={k:v for k,v in groups.items() if v.pv is not None and not v.pv.empty}
-    base=read_base_table(xls) if "base" in sheets else pd.DataFrame()
-    bom=read_bom(xls) if "bom" in sheets else pd.DataFrame()
-    return groups,base,bom
 
-def canonical_product(name):
-    s=normalize(name)
-    compact=re.sub(r"[^a-z0-9]","",s)
-    m=re.fullmatch(r"(?:produto|product|sku)?p?(\d+)",compact)
-    if m:return "P"+str(int(m.group(1)))
-    return compact.upper()
+def load_data(content):
+    wb=openpyxl.load_workbook(io.BytesIO(content),read_only=True,data_only=True)
+    discover_products(wb)
+    missing=[s for s in list(SHEETS.values())+sorted(set(sum(ANALOG.values(),[]))) if s not in wb.sheetnames]
+    if missing:raise ValueError("A planilha não é o Triangulo_Produtos_V2.xlsx do TCC final. Abas ausentes: "+", ".join(missing)+". Não use a Base de Dados - PUC (2).xlsx antiga (A–P).")
+    base=read_base(wb)
+    missingbase=[p for p in MODEL if p not in base]
+    if missingbase:raise ValueError("Sem LT/cobertura na aba Base: "+", ".join(missingbase))
+    blocks={s:parse_blocks(wb[s]) for s in list(SHEETS.values())+sorted(set(sum(ANALOG.values(),[])))}
+    for p,s in SHEETS.items():
+        if any(k not in blocks[s] for k in ("PV","PROD","EST")):
+            raise ValueError(f"{s}: são necessários os blocos PV, PRODUÇÃO e ESTOQUE.")
+    wb.close()
+    return base,blocks
 
-def canonical_benchmark(name):
-    s=normalize(name)
-    compact=re.sub(r"[^a-z0-9]","",s)
-    m=re.fullmatch(r"(?:benchmark|bench|analog|analogo)?([a-z])(\d+)?",compact)
-    if m and m.group(1) not in ("p",):
-        return m.group(1).upper()+"_"+(m.group(2) or "1")
-    return compact.upper()
+def known(pv,c):
+    """Realizado m = valor da coluna m na revisão m+1 (conhecido no fechamento c)."""
+    vals={}
+    for m in pv.columns:
+        if m<=c and m+1 in pv.index:
+            x=pv.loc[m+1,m]
+            if pd.notna(x):vals[m]=float(x)
+    s=pd.Series(vals,dtype=float).sort_index()
+    suspect=pd.Period("2025-09",freq="M")
+    if suspect in s and s[suspect]==0 and suspect-1 in s and suspect+1 in s:
+        s[suspect]=(s[suspect-1]+s[suspect+1])/2
+    pos=s[s>0]
+    return s[s.index>=pos.index[0]] if not pos.empty else pd.Series(dtype=float)
 
-def available_analogs(product, groups):
-    """Match case-study benchmark aliases including 'PRODUTO 1' and 'Benchmark A'."""
-    defaults={"P1":["A_1","B_1"],"P2":["C_2"],"P3":["D_3","E_3"]}
-    expected=defaults.get(canonical_product(product),[])
-    selected=[]
-    for benchmark in expected:
-        for name in groups:
-            if name!=product and canonical_benchmark(name)==benchmark:
-                selected.append(name)
-                break
-    return selected
+def analog_series(blocks,c):
+    # A MEA-P histórica foi calibrada com os benchmarks dos três produtos
+    # originais. Adicionar novos SKUs não pode alterar retroativamente o pipe.
+    reference = set(sum((ANALOG.get(p, []) for p in ("P1","P2","P3")), []))
+    if not reference:
+        reference = set(sum(ANALOG.values(), []))
+    return {b:known(blocks[b]["PV"],c) for b in reference}
 
-def realized(group):
-    return realized_from_matrix(group.pv)
+def pipe_index(blocks,c):
+    ix=[]
+    for b,s in analog_series(blocks,c).items():
+        a=np.log10(s.to_numpy(float)) if len(s) and (s>0).all() else np.array([])
+        if len(a)>=6:ix.append(a[:3]-a[3:].mean())
+    if not ix:raise ValueError("São necessários benchmarks com pelo menos 6 vendas conhecidas para estimar o pipe.")
+    return np.mean(ix,axis=0)
 
-def planned_launch(matrix, origin):
-    """First positive sell-in known by this planning version, not first future month.
-    A July closing for a December launch must continue to refer to December.
-    """
-    if origin not in matrix.index:return None
-    known=realized_from_matrix(matrix)
-    sold=known[(known.index<origin)&(known>0)]
-    if len(sold):return min(sold.index)
-    earlier=[v for v in matrix.index if v<=origin]
-    if not earlier:return None
-    first=matrix.loc[min(earlier)].dropna()
-    initial=first[first>0]
-    if len(initial):return min(initial.index)
-    current=matrix.loc[origin].dropna()
-    future=current[(current.index>=origin)&(current>0)]
-    return min(future.index) if len(future) else None
+def forecast(p,months,c,blocks,model=None):
+    model=model or MODEL[p]
+    sheet=SHEETS[p]; own=known(blocks[sheet]["PV"],c)
+    historical=known(blocks[sheet]["PV"],max(blocks[sheet]["PV"].index))
+    start=historical.index.min() if not historical.empty else None
+    if start is None or pd.isna(start):raise ValueError(f"{p}: sem venda realizada.")
+    if model=="Naive":
+        if own.empty:raise ValueError(f"{p}: Naive exige vendas conhecidas.")
+        return np.repeat(float(own.iloc[-1]),len(months))
+    if model=="Oficial":
+        pv=blocks[sheet]["PV"]
+        v=c+1
+        if v not in pv.index:raise ValueError(f"Não existe revisão {label(v)} para {p}.")
+        return np.array([float(pv.loc[v,m]) if m in pv.columns and pd.notna(pv.loc[v,m]) else np.nan for m in months])
+    benches=ANALOG[p]
+    if model=="MEA-P":indexes=pipe_index(blocks,c)
+    else:indexes=np.zeros(3)
+    ys=np.log10(own.to_numpy(float)) if len(own) and (own>0).all() else np.array([])
+    ys=ys.copy()
+    ys[:min(3,len(ys))]-=indexes[:min(3,len(ys))]
+    levels=[]
+    cutoff=min(c,start-1)
+    for b in benches:
+        s=known(blocks[b]["PV"],cutoff)
+        if len(s)==0 or (s<=0).any():continue
+        bs=np.log10(s.to_numpy(float))
+        bs[:min(3,len(bs))]-=indexes[:min(3,len(bs))]
+        levels.append(np.concatenate([bs,ys]).mean())
+    if not levels:raise ValueError(f"{p}: benchmark insuficiente para {model}.")
+    level=np.mean(levels)
+    return np.array([10**(level+(indexes[(m-start).n] if 0<=(m-start).n<3 else 0)) for m in months])
 
-def indices_for_analog(series):
-    y=series[series>0].sort_index()
-    if len(y)<6:return {}
-    base=np.log10(y.iloc[3:])
-    if not len(base): return {}
-    return {k:float(np.log10(y.iloc[k-1])-base.mean()) for k in (1,2,3)}
-
-def analog_series(analog,groups,origin,launch):
-    hist=realized(groups[analog])
-    cutoff=origin if launch is None else min(origin,launch)
-    return hist[(hist.index<cutoff)&(hist>0)].sort_index()
-
-def analog_forecast(groups,sku,analogs,origin,launch,h=3,pipe=False):
-    """Equal-weight geometric levels; own actuals only when known before the origin.
-    Pipe indices are estimated from analogous launches, not the target's future."""
-    own=realized(groups[sku]); own=own[(own.index<origin)&(own>0)]
-    series=[analog_series(a,groups,origin,launch) for a in analogs if a in groups]
-    series=[s for s in series if len(s)]
-    if not series:return None
-    base_logs=[]
-    pipe_indices=[]
-    if pipe:
-        pipe_indices=[indices_for_analog(s) for s in series]
-    pipe_log={k:float(np.mean([p[k] for p in pipe_indices if k in p])) for k in (1,2,3)
-              if any(k in p for p in pipe_indices)}
-    for idx,old in enumerate(series):
-        augmented=np.log10(old.values).astype(float)
-        if pipe:
-            for k in (1,2,3):
-                if k in pipe_log and len(augmented)>=k:
-                    augmented[k-1]-=pipe_log[k]
-        if len(own):
-            new_log=np.log10(own.values)
-            if pipe and launch is not None:
-                for j,p in enumerate(own.index):
-                    life=int(p.ordinal-launch.ordinal)+1
-                    if life in pipe_log: new_log[j]-=pipe_log[life]
-            augmented=np.concatenate([augmented,new_log])
-        base_logs.append(float(np.mean(augmented)))
-    level=float(np.mean(base_logs))
-    out=[]
-    for step in range(1,h+1):
-        # Version JUL/26 is issued after JUN/26 closes and forecasts JUL/26 (h=1).
-        target=origin+step-1
-        life=int(target.ordinal-launch.ordinal)+1 if launch is not None else None
-        out.append(10.0**(level + (pipe_log.get(life,0.0) if pipe else 0.0)))
-    return np.asarray(out,dtype=float)
-
-def candidate(groups,sku,analogs,origin,launch,method,h=3):
-    history=realized(groups[sku])
-    history=history[history.index<origin]
-    if method=="Oficial":
-        if origin not in groups[sku].pv.index:return None
-        s=groups[sku].pv.loc[origin]
-        vals=[s.get(origin+k-1,np.nan) for k in range(1,h+1)]
-        return np.asarray(vals,dtype=float)
-    if method in ("MEA","MEA-P"):
-        return analog_forecast(groups,sku,analogs,origin,launch,h,pipe=method=="MEA-P")
-    if len(history):
-        return forecast_model(method,history.values,h)
-    return None
-
-def rolling_audit(groups,sku,analogs,closure,launch):
+def history_errors(p,c,blocks,model=None):
+    """Backtest mensal h=1..3 somente com alvos realizados e origens passadas.
+    Sacola de arranque (origens com 3 a 5 meses conhecidos), como no piloto."""
+    pv=blocks[SHEETS[p]]["PV"]
+    last=known(pv,c)
+    if last.empty:return np.array([]),0
+    start=last.index.min()
     rows=[]
-    pv=groups[sku].pv
-    truth=realized(groups[sku])
-    for origin in pv.index:
-        if origin>=closure:continue
-        for meth in ["Oficial","MEA","MEA-P",*MODELS]:
-            launch_at_origin=planned_launch(pv,origin) or launch
-            pred=candidate(groups,sku,analogs,origin,launch_at_origin,meth,3)
-            if pred is None:continue
-            for h,guess in enumerate(pred,1):
-                t=origin+h-1
-                if t>=closure or t not in truth.index or pd.isna(guess) or truth[t]<=0:continue
-                rows.append({"origin":origin,"target":t,"h":h,"model":meth,
-                             "forecast":float(guess),"actual":float(truth[t]),
-                             "error":float(truth[t]-guess),"ape":abs(float(truth[t]-guess))/truth[t]*100})
-    return pd.DataFrame(rows)
+    for n in (3,4,5):
+        origin=start+n-1
+        if origin>=c:continue
+        months=[origin+h for h in (1,2,3)]
+        try:fc=forecast(p,months,origin,blocks,model=model)
+        except (ValueError,KeyError):continue
+        for m,f in zip(months,fc):
+            if m in last.index and np.isfinite(f):
+                rows.append(float(last.loc[m])-float(f))
+    return np.asarray(rows,dtype=float),len(rows)
 
-def rank_models(audit):
-    if audit.empty:return pd.DataFrame(),None
-    official=set(zip(audit.loc[audit.model=="Oficial","origin"],
-                     audit.loc[audit.model=="Oficial","target"]))
-    if not official:return pd.DataFrame(),None
-    records=[]
-    for name,g in audit.groupby("model"):
-        pairs=set(zip(g.origin,g.target))
-        if not official.issubset(pairs):continue
-        subset=g[[pair in official for pair in zip(g.origin,g.target)]]
-        if len(subset)<2:continue
-        records.append({"Model":name,"MAPE %":subset.ape.mean(),
-                        "MAE":subset.error.abs().mean(),"N":len(subset)})
-    if not records:return pd.DataFrame(),None
-    table=pd.DataFrame(records).sort_values(["MAPE %","Model"]).reset_index(drop=True)
-    return table,str(table.iloc[0]["Model"])
+def coverage(e,dm):
+    """Forward cover com 30 dias/mês; último mês é não avaliado.
 
-def forecast_path(groups,sku,analogs,closure,launch,model,horizon):
-    pred=candidate(groups,sku,analogs,closure,launch,model,horizon)
-    if pred is None or len(pred)!=horizon:return None
-    pred=np.asarray(pred,dtype=float)
-    if not np.all(np.isfinite(pred)):return None
-    return np.maximum(pred,0)
+    Conforme o ZIP ajustado, a cobertura final exige ao menos um mês
+    de demanda futura dentro do horizonte; NaN não é risco zero.
+    """
+    out=np.full(e.shape,np.nan)
+    n,h=e.shape
+    for j in range(h-1):
+        stock=e[:,j].copy()
+        days=np.zeros(n)
+        active=stock>0
+        future=np.concatenate([dm[:,j+1:],np.maximum(dm[:,-1:],1e-9)],axis=1)
+        for k in range(future.shape[1]):
+            d=np.maximum(future[:,k],1e-9)
+            partial=active & (stock<=d)
+            days[partial]+=30*stock[partial]/d[partial]
+            active[partial]=False
+            days[active]+=30
+            stock[active]-=d[active]
+        if active.any():
+            days[active]+=30*stock[active]/np.maximum(dm[active,-1],1e-9)
+        out[:,j]=days
+    return out
 
-def forecast_residuals(audit,model):
-    if audit.empty or not model:return np.array([])
-    a=audit[audit.model==model]
-    return a["error"].to_numpy(dtype=float)
-
-def monte_carlo(forecast,errors,n=1000,distribution="Normal (0, s)",seed=20261021):
-    if forecast is None or len(errors)<2:
-        return None
-    std=np.std(errors,ddof=1)
-    if not np.isfinite(std):return None
-    rng=np.random.default_rng(seed)
-    if distribution=="Bootstrap centralizado":
-        centered=errors-np.mean(errors)
-        draws=rng.choice(centered,size=(n,len(forecast)),replace=True)
-    else:
-        draws=rng.normal(loc=0.0,scale=std,size=(n,len(forecast)))
-    return np.maximum(np.asarray(forecast,dtype=float)[None,:]+draws,0)
-
-def production_plan(group,closure,periods):
-    if group.pp is None or closure not in group.pp.index:return None
-    series=group.pp.loc[closure]
-    return np.array([max(float(series.get(p,0) or 0),0)
-                     if pd.notna(series.get(p,np.nan)) else 0 for p in periods],dtype=float)
-
-def opening_stock(group,closure):
-    # JUL/26 version is the June closing. The first simulated period is July.
-    # Initial inventory is the recorded June balance, not projected July ending stock.
-    previous=closure-1
-    if group.pe is None or closure not in group.pe.index or previous not in group.pe.columns:
-        return None
-    x=group.pe.loc[closure,previous]
-    return float(x) if pd.notna(x) and x>=0 else None
-
-def forward_cover(stock,demand,step):
-    """Forward cover by sequential depletion, with last demand repeated past the horizon."""
-    count=demand.shape[1]
-    remaining=stock[:,step].astype(float).copy()
-    cover=np.zeros(len(remaining),dtype=float)
-    last=np.maximum(demand[:,-1],0)
-    for j in range(step+1,count):
-        d=np.maximum(demand[:,j],0)
-        positive=d>0
-        days=np.divide(remaining,d,out=np.zeros_like(remaining),where=positive)
-        cover+=np.where(remaining<=0,0,np.where(positive,np.minimum(days,1)*30,30))
-        remaining=np.maximum(remaining-d,0)
-    # Model convention: repeat last known forecast until depletion, capped to 60 months.
-    extended=np.divide(remaining,last,out=np.full_like(remaining,np.inf),where=last>0)
-    cover+=np.where(remaining>0,np.minimum(extended,60)*30,0)
-    return cover
-
-def simulate_inventory(open_stock,receipts,demand):
-    demand=np.asarray(demand,dtype=float)
-    n,h=demand.shape
-    stock=np.zeros((n,h))
-    lost=np.zeros((n,h))
-    carry=np.full(n,float(open_stock))
-    for t in range(h):
-        available=carry+receipts[t]
-        lost[:,t]=np.maximum(demand[:,t]-available,0)
-        carry=np.maximum(available-demand[:,t],0)
-        stock[:,t]=carry
-    covers=np.column_stack([forward_cover(stock,demand,t) for t in range(h)])
-    return stock,lost,covers
-
-def excess_units(stock,demand,limit_months=6):
-    # For each month compare stock to forecast consumption of the next six months.
-    n,h=demand.shape
-    outs=np.zeros((n,h))
+def balance(e0,plan,dm):
+    n,h=dm.shape
+    stock=np.empty_like(dm);lost=np.empty_like(dm)
+    e=np.full(n,float(e0))
     for j in range(h):
-        known=demand[:,j+1:min(h,j+1+limit_months)].sum(axis=1)
-        repeat=max(0,limit_months-max(0,min(h,j+1+limit_months)-(j+1)))
-        consume=known+repeat*demand[:,-1]
-        outs[:,j]=np.maximum(stock[:,j]-consume,0)
-    return outs
+        avail=np.maximum(e+plan[j],0)
+        lost[:,j]=np.maximum(dm[:,j]-avail,0)
+        e=np.maximum(avail-dm[:,j],0)
+        stock[:,j]=e
+    return stock,lost,coverage(stock,dm)
 
-def metrics(open_stock,receipts,demand,limit=180,window=None):
-    stock,lost,cover=simulate_inventory(open_stock,receipts,demand)
-    num=demand.shape[1] if window is None else min(demand.shape[1],window)
-    excess=np.nanmean(cover[:,:num]>=limit,axis=0)
-    risk_lost=np.nanmean(lost[:,:num]>0,axis=0)
-    cover50=np.nanmedian(cover[:,:num],axis=0)
-    excess_curve=excess_units(stock,demand)[:,:num].mean(axis=0)
-    total_demand=demand[:,:num].sum()
-    fill=1.0-lost[:,:num].sum()/total_demand if total_demand>0 else np.nan
-    return {"stock":stock,"lost":lost,"cover":cover,
-            "excess_risk":excess,"stockout_risk":risk_lost,
-            "median_cover":cover50,"fill_rate":fill,
-            "excess_worst":float(np.max(excess_curve)) if len(excess_curve) else 0.0,
-            "lost_mean":float(lost[:,:num].sum(axis=1).mean()),
-            "excess_curve":excess_curve}
+def simulate(p,c,blocks,base,method="Normal (0, s)",persistent=False,operational_model=None):
+    sheet=SHEETS[p]
+    b=blocks[sheet]
+    review=c+1
+    pv=b["PV"]
+    months=[m for m in sorted(pv.columns) if m>c and m in b["PROD"].columns]
+    if review not in b["PROD"].index or review not in b["EST"].index:
+        raise ValueError(f"Sem produção/estoque na revisão {label(review)}.")
+    if c not in b["EST"].columns:raise ValueError("Sem estoque inicial no fechamento.")
+    if not months:raise ValueError("Não existem meses futuros nesta revisão.")
+    production=np.array([float(b["PROD"].loc[review,m]) for m in months])
+    e0=float(b["EST"].loc[review,c])
+    center=forecast(p,months,c,blocks,model=operational_model)
+    if not np.isfinite(center).all():raise ValueError("Faltam previsões centrais na revisão.")
+    errors,num=history_errors(p,c,blocks,model=operational_model)
+    if num<2:raise ValueError(f"Apenas {num} erros de arranque conhecidos. Simulação indisponível (mínimo 2).")
+    sd=float(np.std(errors,ddof=1))
+    # Mesmo esquema de sorteio do notebook: seed + CRC32 de
+    # produto, fechamento e nome interno do modelo, por mês.
+    model_used=operational_model or MODEL[p]
+    chave=f"{p}{c}{CHAVE_SORTEIO.get(model_used,model_used)}est"
+    rng=np.random.default_rng(SEED+zlib.crc32(chave.encode())%100000)
+    def draw():
+        if method=="Normal (0, s)":
+            return rng.normal(0.0,sd,N)
+        return rng.choice(errors-errors.mean(),N)
+    if persistent:
+        eps=np.repeat(draw()[:,None],len(months),axis=1)
+    else:
+        eps=np.column_stack([draw() for _ in months])
+    dm=np.maximum(center+eps,0)
+    stock,lost,cov=balance(e0,production,dm)
+    days,lt=base[p];ltm=math.ceil(lt*7/30);window=ltm+math.ceil(days/30)+1
+    active=np.array([j<window for j in range(len(months))])
+    evaluated=np.array([j<len(months)-1 for j in range(len(months))])
+    return dict(months=months,production=production,e0=e0,center=center,errors=errors,sd=sd,dm=dm,stock=stock,lost=lost,cov=cov,active=active,ltm=ltm,window=window,
+                evaluated=evaluated,model=model_used)
 
-def deadline(receipt_month,lead_weeks):
-    date=receipt_month.to_timestamp(how="start")
-    return date-timedelta(days=7*float(lead_weeks))
+def impacts(res,p,new_plan,baseline):
+    s,l,c=balance(res["e0"],new_plan,res["dm"])
+    win=res["active"]
+    return dict(excesso=float((c[:,win]>=LIM).any(axis=1).mean()),ruptura=float((l[:,win]>0).any(axis=1).mean()),
+                delta_excesso=float((c[:,win]>=LIM).any(axis=1).mean()-baseline["excesso"]),
+                delta_ruptura=float((l[:,win]>0).any(axis=1).mean()-baseline["ruptura"]))
 
-def actionable_lots(closure,months,receipts,lead_weeks):
-    if pd.isna(lead_weeks):return []
-    asof=(closure-1).to_timestamp(how="end")
-    return [(i,p,float(receipts[i]),deadline(p,lead_weeks))
-            for i,p in enumerate(months)
-            if receipts[i]>0 and deadline(p,lead_weeks)>asof]
-
-def compare_alternative(base,initial,receipts,demand,index,change,limit,window):
-    mod=np.array(receipts,dtype=float).copy()
-    mod[index]=max(mod[index]*(1+change/100),0)
-    test=metrics(initial,mod,demand,limit,window)
-    p_old=base["stockout_risk"]
-    p_new=test["stockout_risk"]
-    new_signal=np.any((p_old<=0.025)&(p_new>0.025))
-    large_jump=np.any((p_new-p_old)>0.025+1e-10)
-    admissible=not (new_signal or large_jump)
-    return {"change":change,"excess_avoided":base["excess_worst"]-test["excess_worst"],
-            "lost_extra":test["lost_mean"]-base["lost_mean"],
-            "fill":test["fill_rate"],"stockout_risk":float(np.max(p_new)),
-            "excess_risk":float(np.max(test["excess_risk"])),
-            "admissible":admissible,"test":test}
-
-def critical_window(lead_weeks,cover_target,horizon):
-    if pd.isna(lead_weeks) or pd.isna(cover_target):return horizon
-    return min(horizon,int(math.ceil((float(lead_weeks)*7+float(cover_target)+30)/30)))
-
-
-def benchmark_log_errors(groups,analogs,closure):
-    """Exploratory pre-launch error pool from cross-benchmark predictions.
-    Only benchmarks whose histories were available by closure and older peers
-    are used. These log errors do NOT constitute independent prospective tests.
-    """
-    rows=[]
-    histories={b:realized(groups[b]) for b in analogs if b in groups}
-    for benchmark,s in histories.items():
-        positive=s[(s>0)&(s.index<closure)].sort_index()
-        if len(positive)<3: continue
-        launch=positive.index[0]
-        older=[k for k,v in histories.items() if k!=benchmark
-               and len(v[(v>0)&(v.index<launch-1)])>0]
-        if not older:continue
-        # Forecast first launch month from its own plan version (issued after the prior close).
-        prev=analog_forecast(groups,benchmark,older,launch,launch,h=3,pipe=False)
-        if prev is None:continue
-        for h in range(3):
-            target=launch+h
-            if target in positive.index and prev[h]>0:
-                rows.append(float(np.log(positive[target]/prev[h])))
-    return np.asarray(rows,dtype=float)
-
-def scenarios_from_benchmarks(forecast,log_errors,n=1000,seed=20261021):
-    """Early monitoring uses the separately documented multiplicative assumption."""
-    if forecast is None or len(log_errors)<2:return None
-    std=float(np.std(log_errors,ddof=1))
-    rng=np.random.default_rng(seed)
-    errors=rng.normal(0.0,std,size=(n,len(forecast)))
-    return np.maximum(forecast[None,:]*np.exp(np.clip(errors,-10,10)),0)
+def fmt(n):return f"{n:,.0f}".replace(",",".")
 
 
-def compare_reschedule(base,initial,receipts,demand,index,new_index,limit,window):
-    """Move a single lot to an eligible future month; use exactly the same demand draws."""
-    if new_index<0 or new_index>=len(receipts) or new_index==index:
-        raise ValueError("Lot destination outside the projected horizon")
-    mod=np.array(receipts,dtype=float).copy()
-    amount=mod[index]
-    mod[index]=0
-    mod[new_index]+=amount
-    test=metrics(initial,mod,demand,limit,window)
-    old=base["stockout_risk"]
-    new=test["stockout_risk"]
-    admissible=not (np.any((old<=0.025)&(new>0.025)) or
-                    np.any((new-old)>0.025+1e-10))
-    return {"excess_avoided":base["excess_worst"]-test["excess_worst"],
-            "lost_extra":test["lost_mean"]-base["lost_mean"],
-            "fill":test["fill_rate"],"stockout_risk":float(np.max(new)),
-            "excess_risk":float(np.max(test["excess_risk"])),
-            "admissible":admissible,"test":test}
-
-
-def available_plan_horizon(group,closure):
-    """Count contiguous monthly targets starting with the version month.
-    Version JUL/26 includes JUL/26 as h=1, not AUG/26.
-    """
-    if closure not in group.pv.index:return 0
-    series=group.pv.loc[closure]
-    possible=series[(series.index>=closure)&series.notna()]
-    if possible.empty:return 0
-    last=max(possible.index)
-    count=0
-    for n in range(int(last.ordinal-closure.ordinal)+1):
-        target=closure+n
-        if target not in series.index or pd.isna(series[target]):break
-        count+=1
-    return count
-
-def data_readiness(group,closure,forecast,scenario,initial,receipts):
-    """Explicit reasons that a dashboard value is unavailable."""
-    messages=[]
-    if group.pp is None:
-        messages.append("Production block (PP) not detected")
-    elif closure not in group.pp.index:
-        messages.append("PP has no row for selected closing")
-    if group.pe is None:
-        messages.append("Inventory block (PE) not detected")
-    elif closure not in group.pe.index:
-        messages.append("PE has no row for selected closing")
-    elif closure-1 not in group.pe.columns or pd.isna(group.pe.loc[closure,closure-1]):
-        messages.append("Previous month's closing stock is not recorded in the selected version")
-    if forecast is None:messages.append("Selected model has no complete forecast within planning horizon")
-    if scenario is None:messages.append("Insufficient residuals for 1,000 demand scenarios")
-    if receipts is None and group.pp is not None:messages.append("Production receipts unavailable for selected months")
-    if initial is None and group.pe is not None:messages.append("Initial stock unavailable for selected closing")
-    return messages
