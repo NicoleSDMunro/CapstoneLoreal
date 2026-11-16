@@ -466,7 +466,8 @@ def benchmark_log_errors(groups,analogs,closure):
         older=[k for k,v in histories.items() if k!=benchmark
                and len(v[(v>0)&(v.index<launch-1)])>0]
         if not older:continue
-        prev=analog_forecast(groups,benchmark,older,launch-1,launch,h=3,pipe=False)
+        # Forecast first launch month from its own plan version (issued after the prior close).
+        prev=analog_forecast(groups,benchmark,older,launch,launch,h=3,pipe=False)
         if prev is None:continue
         for h in range(3):
             target=launch+h
