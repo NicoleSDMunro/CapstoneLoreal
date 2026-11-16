@@ -1,11 +1,18 @@
-"""Entrada Streamlit: reexecuta a interface em cada rerun (sem cache de import)."""
+"""Smart Launch Streamlit entrypoint.
+
+Launch Decision Center is the default executive view. The extended classic
+workspace remains available with ?classic=1. No business decisions are
+executed automatically.
+"""
 from pathlib import Path
 import runpy
 import sys
+import streamlit as st
 
-# Remove módulos do Smart Launch já carregados, para que uma atualização do GitHub
-# nunca misture arquivo novo com módulo antigo na memória do Streamlit Cloud.
-for nome in [m for m in sys.modules if m.startswith("smartlaunch_")]:
-    del sys.modules[nome]
+for name in list(sys.modules):
+    if name.startswith("smartlaunch_"):
+        del sys.modules[name]
 
-runpy.run_path(str(Path(__file__).with_name("smartlaunch_ui.py")), run_name="__main__")
+classic = str(st.query_params.get("classic", "")).lower() in ("1", "true", "sim")
+page = "smartlaunch_ui.py" if classic else "smartlaunch_dashboard.py"
+runpy.run_path(str(Path(__file__).with_name(page)), run_name="__main__")
