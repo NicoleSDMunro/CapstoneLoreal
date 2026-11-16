@@ -260,7 +260,8 @@ def rolling_audit(groups,sku,analogs,closure,launch):
     for origin in pv.index:
         if origin>=closure:continue
         for meth in ["Oficial","MEA","MEA-P",*MODELS]:
-            pred=candidate(groups,sku,analogs,origin,launch,meth,3)
+            launch_at_origin=planned_launch(pv,origin) or launch
+            pred=candidate(groups,sku,analogs,origin,launch_at_origin,meth,3)
             if pred is None:continue
             for h,guess in enumerate(pred,1):
                 t=origin+h
@@ -327,7 +328,7 @@ def opening_stock(group,closure):
 
 def forward_cover(stock,demand,step):
     """Forward cover by sequential depletion, with last demand repeated past the horizon."""
-    count=len(stock)
+    count=demand.shape[1]
     remaining=stock[:,step].astype(float).copy()
     cover=np.zeros(len(remaining),dtype=float)
     last=np.maximum(demand[:,-1],0)
@@ -338,8 +339,8 @@ def forward_cover(stock,demand,step):
         cover+=np.where(remaining<=0,0,np.where(positive,np.minimum(days,1)*30,30))
         remaining=np.maximum(remaining-d,0)
     # Model convention: repeat last known forecast until depletion, capped to 60 months.
-    extended=np.divide(remaining,last,out=np.full_like(remaining,np.nan),where=last>0)
-    cover+=np.minimum(extended,60)*30
+    extended=np.divide(remaining,last,out=np.full_like(remaining,np.inf),where=last>0)
+    cover+=np.where(remaining>0,np.minimum(extended,60)*30,0)
     return cover
 
 def simulate_inventory(open_stock,receipts,demand):
@@ -412,3 +413,34 @@ def compare_alternative(base,initial,receipts,demand,index,change,limit,window):
 def critical_window(lead_weeks,cover_target,horizon):
     if pd.isna(lead_weeks) or pd.isna(cover_target):return horizon
     return min(horizon,int(math.ceil((float(lead_weeks)*7+float(cover_target)+30)/30)))
+
+
+def benchmark_log_errors(groups,analogs,closure):
+    """Exploratory pre-launch error pool from cross-benchmark predictions.
+    Only benchmarks whose histories were available by closure and older peers
+    are used. These log errors do NOT constitute independent prospective tests.
+    """
+    rows=[]
+    histories={b:realized(groups[b]) for b in analogs if b in groups}
+    for benchmark,s in histories.items():
+        positive=s[(s>0)&(s.index<closure)].sort_index()
+        if len(positive)<3: continue
+        launch=positive.index[0]
+        older=[k for k,v in histories.items() if k!=benchmark
+               and len(v[(v>0)&(v.index<launch-1)])>0]
+        if not older:continue
+        prev=analog_forecast(groups,benchmark,older,launch-1,launch,h=3,pipe=False)
+        if prev is None:continue
+        for h in range(3):
+            target=launch+h
+            if target in positive.index and prev[h]>0:
+                rows.append(float(np.log(positive[target]/prev[h])))
+    return np.asarray(rows,dtype=float)
+
+def scenarios_from_benchmarks(forecast,log_errors,n=1000,seed=20261021):
+    """Early monitoring uses the separately documented multiplicative assumption."""
+    if forecast is None or len(log_errors)<2:return None
+    std=float(np.std(log_errors,ddof=1))
+    rng=np.random.default_rng(seed)
+    errors=rng.normal(0.0,std,size=(n,len(forecast)))
+    return np.maximum(forecast[None,:]*np.exp(np.clip(errors,-10,10)),0)
