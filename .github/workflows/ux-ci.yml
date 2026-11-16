@@ -1,0 +1,31 @@
+name: Smart Launch UX checks
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install application dependencies
+        run: pip install -r requirements.txt
+      - name: Validate Python syntax
+        run: python -m compileall -q app.py smartlaunch_ui.py smartlaunch_core.py smartlaunch_priority.py smartlaunch_impact.py smartlaunch_monthly.py smartlaunch_validation.py smartlaunch_visuals.py
+      - name: Test synthetic data
+        run: PYTHONPATH=. python tests/test_smoke.py
+      - name: Test operational impact
+        run: PYTHONPATH=. python tests/test_impact.py
+      - name: Test supplier deadlines and missing lots
+        run: PYTHONPATH=. python tests/test_supply.py
+      - name: Test alert opportunity and official comparison
+        run: PYTHONPATH=. python tests/test_metrics.py
+      - name: Test new decision charts
+        run: PYTHONPATH=. python tests/test_visuals.py
+      - name: Test consultant UX
+        run: PYTHONPATH=. python tests/test_ui.py
