@@ -268,7 +268,8 @@ def analog_forecast(groups,sku,analogs,origin,launch,h=3,pipe=False):
     level=float(np.mean(base_logs))
     out=[]
     for step in range(1,h+1):
-        target=origin+step
+        # Version JUL/26 is issued after JUN/26 closes and forecasts JUL/26 (h=1).
+        target=origin+step-1
         life=int(target.ordinal-launch.ordinal)+1 if launch is not None else None
         out.append(10.0**(level + (pipe_log.get(life,0.0) if pipe else 0.0)))
     return np.asarray(out,dtype=float)
@@ -279,7 +280,7 @@ def candidate(groups,sku,analogs,origin,launch,method,h=3):
     if method=="Oficial":
         if origin not in groups[sku].pv.index:return None
         s=groups[sku].pv.loc[origin]
-        vals=[s.get(origin+k,np.nan) for k in range(1,h+1)]
+        vals=[s.get(origin+k-1,np.nan) for k in range(1,h+1)]
         return np.asarray(vals,dtype=float)
     if method in ("MEA","MEA-P"):
         return analog_forecast(groups,sku,analogs,origin,launch,h,pipe=method=="MEA-P")
@@ -298,7 +299,7 @@ def rolling_audit(groups,sku,analogs,closure,launch):
             pred=candidate(groups,sku,analogs,origin,launch_at_origin,meth,3)
             if pred is None:continue
             for h,guess in enumerate(pred,1):
-                t=origin+h
+                t=origin+h-1
                 if t>=closure or t not in truth.index or pd.isna(guess) or truth[t]<=0:continue
                 rows.append({"origin":origin,"target":t,"h":h,"model":meth,
                              "forecast":float(guess),"actual":float(truth[t]),
@@ -354,10 +355,12 @@ def production_plan(group,closure,periods):
                      if pd.notna(series.get(p,np.nan)) else 0 for p in periods],dtype=float)
 
 def opening_stock(group,closure):
-    # A closing-month PE value must exist. Never guess from later projected stock.
-    if group.pe is None or closure not in group.pe.index or closure not in group.pe.columns:
+    # JUL/26 version is the June closing. The first simulated period is July.
+    # Initial inventory is the recorded June balance, not projected July ending stock.
+    previous=closure-1
+    if group.pe is None or closure not in group.pe.index or previous not in group.pe.columns:
         return None
-    x=group.pe.loc[closure,closure]
+    x=group.pe.loc[closure,previous]
     return float(x) if pd.notna(x) and x>=0 else None
 
 def forward_cover(stock,demand,step):
@@ -424,7 +427,7 @@ def deadline(receipt_month,lead_weeks):
 
 def actionable_lots(closure,months,receipts,lead_weeks):
     if pd.isna(lead_weeks):return []
-    asof=closure.to_timestamp(how="end")
+    asof=(closure-1).to_timestamp(how="end")
     return [(i,p,float(receipts[i]),deadline(p,lead_weeks))
             for i,p in enumerate(months)
             if receipts[i]>0 and deadline(p,lead_weeks)>asof]
@@ -501,14 +504,16 @@ def compare_reschedule(base,initial,receipts,demand,index,new_index,limit,window
 
 
 def available_plan_horizon(group,closure):
-    """Count consecutive months within the actual planning file, never beyond it."""
+    """Count contiguous monthly targets starting with the version month.
+    Version JUL/26 includes JUL/26 as h=1, not AUG/26.
+    """
     if closure not in group.pv.index:return 0
     series=group.pv.loc[closure]
-    possible=series[(series.index>closure)&series.notna()]
+    possible=series[(series.index>=closure)&series.notna()]
     if possible.empty:return 0
     last=max(possible.index)
     count=0
-    for n in range(1,int(last.ordinal-closure.ordinal)+1):
+    for n in range(int(last.ordinal-closure.ordinal)+1):
         target=closure+n
         if target not in series.index or pd.isna(series[target]):break
         count+=1
@@ -525,8 +530,8 @@ def data_readiness(group,closure,forecast,scenario,initial,receipts):
         messages.append("Inventory block (PE) not detected")
     elif closure not in group.pe.index:
         messages.append("PE has no row for selected closing")
-    elif closure not in group.pe.columns or pd.isna(group.pe.loc[closure,closure]):
-        messages.append("Closing stock is not recorded for selected closing")
+    elif closure-1 not in group.pe.columns or pd.isna(group.pe.loc[closure,closure-1]):
+        messages.append("Previous month's closing stock is not recorded in the selected version")
     if forecast is None:messages.append("Selected model has no complete forecast within planning horizon")
     if scenario is None:messages.append("Insufficient residuals for 1,000 demand scenarios")
     if receipts is None and group.pp is not None:messages.append("Production receipts unavailable for selected months")
