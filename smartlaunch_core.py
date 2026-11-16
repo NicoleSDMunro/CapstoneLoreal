@@ -99,7 +99,8 @@ def detect_blocks(raw):
     for i in range(len(raw)):
         snippets=[normalize(x) for x in raw.iloc[i,:min(5,raw.shape[1])].tolist() if pd.notna(x)]
         for kind,values in markers.items():
-            if any(s==v or s.startswith(v+" ") or s.startswith(v+"(") for s in snippets for v in values):
+            if any(s==v or s.startswith(v+" ") or s.startswith(v+"(") or
+                   s.startswith(v+" (") or s.startswith(v+":") for s in snippets for v in values):
                 starts.append((i,kind))
                 break
     for idx,(start,kind) in enumerate(starts):
@@ -178,22 +179,52 @@ def read_triangle(source):
     bom=read_bom(xls) if "bom" in sheets else pd.DataFrame()
     return groups,base,bom
 
+def canonical_product(name):
+    s=normalize(name)
+    compact=re.sub(r"[^a-z0-9]","",s)
+    m=re.fullmatch(r"(?:produto|product|sku)?p?(\d+)",compact)
+    if m:return "P"+str(int(m.group(1)))
+    return compact.upper()
+
+def canonical_benchmark(name):
+    s=normalize(name)
+    compact=re.sub(r"[^a-z0-9]","",s)
+    m=re.fullmatch(r"(?:benchmark|bench|analog|analogo)?([a-z])(\d+)?",compact)
+    if m and m.group(1) not in ("p",):
+        return m.group(1).upper()+"_"+(m.group(2) or "1")
+    return compact.upper()
+
 def available_analogs(product, groups):
+    """Match case-study benchmark aliases including 'PRODUTO 1' and 'Benchmark A'."""
     defaults={"P1":["A_1","B_1"],"P2":["C_2"],"P3":["D_3","E_3"]}
-    lookup={k.upper():k for k in groups}
-    return [lookup[x] for x in defaults.get(product.upper(),[]) if x in lookup and lookup[x]!=product]
+    expected=defaults.get(canonical_product(product),[])
+    selected=[]
+    for benchmark in expected:
+        for name in groups:
+            if name!=product and canonical_benchmark(name)==benchmark:
+                selected.append(name)
+                break
+    return selected
 
 def realized(group):
     return realized_from_matrix(group.pv)
 
 def planned_launch(matrix, origin):
-    if origin not in matrix.index: return None
-    s=matrix.loc[origin]
-    future=s[s.index>=origin].dropna()
-    future=future[future>0]
-    if not future.empty: return future.index[0]
-    # The planning version contains no positive projected sales.
-    return None
+    """First positive sell-in known by this planning version, not first future month.
+    A July closing for a December launch must continue to refer to December.
+    """
+    if origin not in matrix.index:return None
+    known=realized_from_matrix(matrix)
+    sold=known[(known.index<origin)&(known>0)]
+    if len(sold):return min(sold.index)
+    earlier=[v for v in matrix.index if v<=origin]
+    if not earlier:return None
+    first=matrix.loc[min(earlier)].dropna()
+    initial=first[first>0]
+    if len(initial):return min(initial.index)
+    current=matrix.loc[origin].dropna()
+    future=current[(current.index>=origin)&(current>0)]
+    return min(future.index) if len(future) else None
 
 def indices_for_analog(series):
     y=series[series>0].sort_index()
@@ -467,3 +498,37 @@ def compare_reschedule(base,initial,receipts,demand,index,new_index,limit,window
             "fill":test["fill_rate"],"stockout_risk":float(np.max(new)),
             "excess_risk":float(np.max(test["excess_risk"])),
             "admissible":admissible,"test":test}
+
+
+def available_plan_horizon(group,closure):
+    """Count consecutive months within the actual planning file, never beyond it."""
+    if closure not in group.pv.index:return 0
+    series=group.pv.loc[closure]
+    possible=series[(series.index>closure)&series.notna()]
+    if possible.empty:return 0
+    last=max(possible.index)
+    count=0
+    for n in range(1,int(last.ordinal-closure.ordinal)+1):
+        target=closure+n
+        if target not in series.index or pd.isna(series[target]):break
+        count+=1
+    return count
+
+def data_readiness(group,closure,forecast,scenario,initial,receipts):
+    """Explicit reasons that a dashboard value is unavailable."""
+    messages=[]
+    if group.pp is None:
+        messages.append("Production block (PP) not detected")
+    elif closure not in group.pp.index:
+        messages.append("PP has no row for selected closing")
+    if group.pe is None:
+        messages.append("Inventory block (PE) not detected")
+    elif closure not in group.pe.index:
+        messages.append("PE has no row for selected closing")
+    elif closure not in group.pe.columns or pd.isna(group.pe.loc[closure,closure]):
+        messages.append("Closing stock is not recorded for selected closing")
+    if forecast is None:messages.append("Selected model has no complete forecast within planning horizon")
+    if scenario is None:messages.append("Insufficient residuals for 1,000 demand scenarios")
+    if receipts is None and group.pp is not None:messages.append("Production receipts unavailable for selected months")
+    if initial is None and group.pe is not None:messages.append("Initial stock unavailable for selected closing")
+    return messages
