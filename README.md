@@ -29,7 +29,7 @@ If PV is present without production or inventory, the forecast still works. Cond
 - **Uncertainty:** 1,000 Normal(0,s) scenarios from known historical residuals, with an optional centered bootstrap. Where own errors are unavailable, the app may generate exploratory multiplicative scenarios from cross-benchmark log errors. The two approaches must not be equated.
 - **Inventory:** stock and lost sales are simulated using the closing balance and planned receipts; forward cover depletes successive future demands using a 30-day convention.
 - **Alerts:** conditional probabilities of excess/rupture relative to the configured coverage and alert thresholds; the 20% alert level is exploratory, not independently calibrated.
-- **Actionability:** one-lot interventions require a decision deadline outside lead time, and are assessed using identical simulated demand across alternatives. The screening checks no new stockout warning and no increase greater than 2.5 percentage points in any month's probability.
+- **Actionability:** one-lot volume changes and one-month advance/postpone options require a decision deadline outside lead time, and are assessed using identical simulated demand across alternatives. The screening checks no new stockout warning and no increase greater than 2.5 percentage points in any month's probability.
 - **Trade-off:** excess avoided, additional lost sales and fill rate are compared in physical units. No monetary optimum is claimed without cost data.
 
 Export the current forecast, evidence, alternatives and assumptions to Excel.
