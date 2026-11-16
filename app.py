@@ -15,7 +15,8 @@ from smartlaunch_core import (read_triangle, available_analogs, realized,
     planned_launch, rolling_audit, rank_models, candidate, forecast_path,
     forecast_residuals, monte_carlo, production_plan, opening_stock,
     metrics, critical_window, actionable_lots, compare_alternative,
-    benchmark_log_errors, scenarios_from_benchmarks, compare_reschedule)
+    benchmark_log_errors, scenarios_from_benchmarks, compare_reschedule,
+    available_plan_horizon, data_readiness, canonical_product)
 
 st.set_page_config(page_title="Smart Launch | Decision Center",
                    page_icon="📊",layout="wide",initial_sidebar_state="expanded")
@@ -128,7 +129,7 @@ with close_col:
     versions=list(grp.pv.index)
     closure=st.selectbox("PLANNING VERSION",versions,index=len(versions)-1,format_func=plabel,key="closure")
 with hor_col:
-    horizon=st.selectbox("HORIZON",options=[3,6,9,12],index=1,format_func=lambda x:f"{x} months")
+    requested_horizon=st.selectbox("HORIZON",options=[3,6,9,12],index=1,format_func=lambda x:f"{x} months")
 with view_col:
     view=st.selectbox("DISPLAY MODE",["Executive","Analyst"])
 
@@ -148,8 +149,14 @@ with st.sidebar:
     limit=st.number_input("Excess threshold (days)",min_value=30,max_value=720,value=180,step=30)
     attention=st.slider("Alert level: conditional excess probability",min_value=5,max_value=80,value=20,step=5)
     user_meta=product_meta(base,bom,product)
+    canonical=canonical_product(product)
+    if (pd.isna(user_meta.get("lt_weeks",np.nan)) or pd.isna(user_meta.get("cobertura",np.nan))) and canonical!=product:
+        alias_meta=product_meta(base,bom,canonical)
+        for field in ("lt_weeks","cobertura"):
+            if pd.isna(user_meta.get(field,np.nan)) and pd.notna(alias_meta.get(field,np.nan)):
+                user_meta[field]=alias_meta[field]
     fallback_meta={"P1":(16,70),"P2":(10,90),"P3":(8,59)}
-    default_lt,default_cover=fallback_meta.get(product.upper(),(8,90))
+    default_lt,default_cover=fallback_meta.get(canonical,(8,90))
     actual_lt=user_meta.get("lt_weeks",np.nan)
     actual_cover=user_meta.get("cobertura",np.nan)
     known_lt=pd.notna(actual_lt)
@@ -182,6 +189,14 @@ else:
     chosen=manual
     selection_reason="Planner-selected method; not the automatic model ranking"
 
+available_horizon=available_plan_horizon(grp,closure)
+if available_horizon==0:
+    st.error("This closing has no usable future PV months. Select another planning version or check the spreadsheet.")
+    st.stop()
+horizon=min(requested_horizon,available_horizon)
+if horizon<requested_horizon:
+    st.info(f"The workbook contains {available_horizon} complete planning months after {plabel(closure)}. "
+            f"Analysis was limited to {horizon} months instead of {requested_horizon}; no future months were invented.")
 future=[closure+i for i in range(1,horizon+1)]
 pred=forecast_path(groups,product,analogs,closure,launch,chosen,horizon)
 if pred is None and manual.startswith("Automatic"):
@@ -218,14 +233,26 @@ with st.sidebar:
     if scenarios is None:
         st.caption("Requires at least two known forecast errors or cross-benchmark log errors. Probabilities are not fabricated.")
 
+problems=data_readiness(grp,closure,pred,scenarios,initial,receipts)
+with st.sidebar:
+    with st.expander("Import diagnostics · PV / PP / PE",expanded=(len(problems)>0)):
+        st.write(f"**Sales (PV):** {'Detected' if grp.pv is not None else 'Missing'}")
+        st.write(f"**Production (PP):** {'Detected' if grp.pp is not None else 'Missing'}")
+        st.write(f"**Inventory (PE):** {'Detected' if grp.pe is not None else 'Missing'}")
+        st.write(f"**Historical forecast errors:** {len(errs)}")
+        st.write(f"**Forecast model:** {chosen}")
+        st.write(f"**Benchmark selection:** {', '.join(analogs) if analogs else 'None'}")
+        for problem in problems:
+            st.warning(problem)
 window=critical_window(lead_weeks,cover_target,horizon)
 calc=metrics(initial,receipts,scenarios,limit,window) if (
         scenarios is not None and receipts is not None and initial is not None) else None
 lots=actionable_lots(closure,future,receipts,lead_weeks) if receipts is not None else []
 if calc is None:
     response="Planner Review"
-    headline="Forecast available · operational assessment incomplete"
-    explanation="Complete forecast errors, closing stock and planned production to assess conditional probabilities and feasible interventions."
+    headline="Operational risk assessment incomplete"
+    explanation=("; ".join(problems) if problems else "Operational scenario inputs incomplete")+
+                ". Check the import diagnostics in the left sidebar; planner review required."
     priority_index=0
 else:
     priority_index=int(np.argmax(calc["excess_risk"]))
@@ -301,7 +328,8 @@ with left:
 with right:
     section("Risk Monitor","Conditional excess and stockout probability · critical window")
     if calc is None:
-        st.info("Cannot quantify risk with the present data. Stock, production and a minimum sample of forecast errors are required.")
+        st.warning("Risk calculation unavailable: "+("; ".join(problems) if problems else
+                   "missing model or operational input")+". Check the sidebar import diagnostics.")
     else:
         idxs=list(range(min(window,6)))
         for i in idxs:
