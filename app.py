@@ -140,6 +140,8 @@ with st.sidebar:
     defaults=available_analogs(product,groups)
     analogs=st.multiselect("Comparable launches / benchmarks",options=analog_options,default=defaults,
                             help="Select only benchmarks available and comparable at the planning date.")
+    if not analogs:
+        st.warning("No benchmarks selected. MEA / MEA-P cannot be evaluated; other models may still run.")
     launch=planned_launch(grp.pv,closure)
     p_opts=[None]+sorted(set(grp.pv.columns))
     launch=st.selectbox("Planned launch month",p_opts,index=(p_opts.index(launch) if launch in p_opts else 0),
