@@ -250,6 +250,12 @@ window=critical_window(lead_weeks,cover_target,horizon)
 calc=metrics(initial,receipts,scenarios,limit,window) if (
         scenarios is not None and receipts is not None and initial is not None) else None
 lots=actionable_lots(closure,future,receipts,lead_weeks) if receipts is not None else []
+relevant_lots=[]
+if calc is not None and len(calc["excess_risk"]):
+    first_signal=next((idx for idx,r in enumerate(calc["excess_risk"]) if r>0.025),None)
+    if first_signal is not None:
+        # A lot delivered after the first risk cannot prevent that first event.
+        relevant_lots=[lot for lot in lots if lot[0]<=first_signal]
 if calc is None:
     response="Planner Review"
     headline="Operational risk assessment incomplete"
@@ -261,7 +267,7 @@ else:
     risk=float(calc["excess_risk"][priority_index])
     if risk>attention/100:
         headline="Elevated excess exposure detected"
-        response="Supplier Review" if lots else "Commercial Action"
+        response="Supplier Review" if relevant_lots else "Commercial Action"
     elif risk>0.025:
         headline="Excess exposure · monitor closely"
         response="Monitoring"
@@ -269,7 +275,7 @@ else:
         headline="No elevated excess signal in selected horizon"
         response="Monitoring"
     explanation=(f"{plabel(future[priority_index])}: conditional excess probability {risk:.1%}. "
-                 f"{len(lots)} production lots remain outside the configured supplier lead time. "
+                 f"{len(relevant_lots)} production lots can affect the first excess-risk month within the configured supplier lead time. "
                  "Any intervention requires planner review.")
 
 c_main,c_response=st.columns([4,1.18],gap="small")
@@ -297,7 +303,7 @@ values=[
     ("EXCESS RISK",pct(max_ex),"Maximum conditional probability"),
     ("MEDIAN COVER",f"{median:.0f} d" if median is not None and np.isfinite(median) else "—",f"vs {limit}-day threshold"),
     ("FORECAST ERROR",err_label,"Historical rolling MAPE · eligible pairs"),
-    ("ACTIONABLE LOTS",str(len(lots)) if receipts is not None else "—","Outside supplier lead time"),
+    ("ACTIONABLE LOTS",str(len(relevant_lots)) if receipts is not None and calc is not None else "—","Can affect first excess-risk month"),
     ("FILL RATE",pct(fill),"Expected within critical window")
 ]
 for col,(name,val,detail) in zip(k,values):
