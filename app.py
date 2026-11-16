@@ -1,333 +1,258 @@
 from pathlib import Path
-import re
+import html
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 from forecasting import (
-    MODELS, as_period, plabel, read_base_table, read_bom, product_meta,
-    parse_pv_sheet, realized_from_matrix, model_available, forecast_model,
-    build_audit, evaluated_until, choose_model, horizon_metrics,
-    maturity_history, cumulative_history, critical_window_months, validate_audit,
+    MODELS, plabel, read_base_table, read_bom, product_meta,
+    parse_pv_sheet, realized_from_matrix, forecast_model, build_audit,
+    choose_model, evaluated_until,
 )
 
-st.set_page_config(page_title="Etapa 2 | Seleção Dinâmica do Modelo", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Smart Launch | Launch Decision Center", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
-html,body,[class*="css"]{font-family:'Inter',sans-serif}.stApp{background:#050505;color:#f5f5f5}
-.block-container{padding-top:.5rem;padding-bottom:4rem;max-width:1240px}[data-testid="stHeader"]{background:transparent}#MainMenu,footer{visibility:hidden}
-.hero-k{color:#f4c21f;font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase}.hero-t{font-size:34px;line-height:1.03;font-weight:900;letter-spacing:-1.2px;margin-top:7px}.hero-s{color:#9298a3;font-size:14px;max-width:920px;line-height:1.55;margin-top:9px}
-.sep{height:1px;background:#222;margin:18px 0 22px}.section{color:#9ca3af;text-transform:uppercase;letter-spacing:1.8px;font-size:13px;font-weight:750;margin:25px 0 10px}
-.panel,.card,.choice{background:#101010;border:1px solid #292929;border-radius:10px}.panel{padding:18px;margin-bottom:15px}.card{padding:15px;min-height:102px}.lab{color:#6f7680;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700}.val{color:#fff;font-size:21px;font-weight:850;margin-top:8px}.sub{color:#8f96a3;font-size:12px;margin-top:5px;line-height:1.35}
-.choice{padding:24px;border-top:4px solid #f4c21f;background:linear-gradient(145deg,#171717,#0d0d0d)}.choice.bad{border-top-color:#ef6666}.choice .k{color:#8f96a3;font-size:12px;letter-spacing:1.8px;font-weight:800}.choice .m{font-size:42px;font-weight:900;letter-spacing:-1.3px;margin:8px 0}.choice.bad .m{font-size:27px}.choice .txt{color:#c5cad2;font-size:14px;line-height:1.55}.note{display:inline-block;margin-top:10px;padding:5px 10px;border:1px solid rgba(244,194,31,.45);border-radius:999px;color:#f4c21f;background:rgba(244,194,31,.07);font-size:11px;font-weight:800}
-.changed{background:linear-gradient(90deg,rgba(91,156,255,.13),rgba(91,156,255,.02));border-left:5px solid #5b9cff;border-radius:8px;padding:15px 18px;margin:10px 0 16px}.changed small{color:#9ca3af}
-.badge{display:inline-block;margin-top:8px;padding:4px 8px;border-radius:999px;border:1px solid rgba(69,196,155,.4);background:rgba(69,196,155,.08);color:#45c49b;font-size:11px;font-weight:800}
-[data-testid="stSelectbox"] label{color:#8f96a3!important;font-weight:700!important;text-transform:uppercase;letter-spacing:1px;font-size:11px!important}[data-baseweb="select"]>div{background:#151515!important;border-color:#343434!important;color:#fff!important}
-div[data-testid="stButton"] button{border:1px solid #333!important;background:#151515!important;color:#cbd1db!important;border-radius:7px!important;font-weight:750!important}div[data-testid="stButton"] button[kind="primary"]{background:#f4c21f!important;border-color:#f4c21f!important;color:#080808!important}div[data-testid="stButton"] button[kind="primary"] p{color:#080808!important}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html,body,[class*="css"]{font-family:Inter,sans-serif}
+.stApp{background:#f3f6fa;color:#142338}
+.block-container{padding-top:2.1rem;max-width:1360px;padding-bottom:4rem}
+[data-testid="stSidebar"]{background:#102d49}
+[data-testid="stSidebar"] *{color:#f4f8fc}
+[data-testid="stSidebar"] [data-baseweb="select"] *{color:#152b42}
+[data-testid="stSidebar"] [data-testid="stFileUploader"]{border-radius:10px}
+[data-testid="stHeader"]{background:transparent}
+#MainMenu,footer{visibility:hidden}
+.kicker{font-size:11px;color:#2564c4;letter-spacing:2px;font-weight:800}
+.heading{font-size:34px;letter-spacing:-1px;line-height:1.1;font-weight:800;color:#172c46;margin:6px 0}
+.subtitle{color:#718197;font-size:13px;margin-bottom:22px}
+.hero{background:linear-gradient(115deg,#102c46,#1c466c);border-radius:17px;padding:25px 29px;color:white;margin-bottom:16px}
+.hero .tag{font-size:10px;letter-spacing:1.5px;color:#aecbe8;font-weight:800}
+.hero .big{font-size:26px;line-height:1.2;font-weight:800;margin:9px 0}
+.hero .desc{font-size:13px;line-height:1.65;color:#d4e3f0}
+.kpi{min-height:132px;padding:18px;background:white;border:1px solid #e9eef4;border-radius:14px;box-shadow:0 6px 18px rgba(30,55,80,.04);margin-bottom:5px}
+.kpi .name{font-size:10px;font-weight:800;color:#728197;text-transform:uppercase;letter-spacing:.8px}
+.kpi .number{font-size:29px;font-weight:800;color:#172c46;margin:12px 0 5px}
+.kpi .detail{font-size:11px;color:#8a98a8}
+.sec{color:#6e7f92;font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;margin:23px 0 9px}
+.panel{background:white;border:1px solid #e8edf4;border-radius:15px;padding:20px;margin-bottom:12px;box-shadow:0 6px 18px rgba(30,55,80,.04)}
+.panel h3{margin:0 0 4px;font-size:17px;color:#213650}
+.panel p{margin:4px 0 13px;color:#8794a6;font-size:12px}
+.notice{background:#edf4fc;border-left:3px solid #478cf8;padding:12px 14px;border-radius:5px;color:#345270;font-size:12px;line-height:1.6}
+.pill{border-radius:30px;background:#e9f4ff;color:#2466bb;font-size:11px;font-weight:800;padding:5px 10px}
 </style>
 """, unsafe_allow_html=True)
 
-FORECAST_H=14
+def esc(v):
+    return html.escape(str(v))
 
-def short(v):
-    if v is None or pd.isna(v): return "—"
-    v=float(v)
-    if abs(v)>=1_000_000: return f"{v/1_000_000:.1f} mi".replace(".",",")
-    if abs(v)>=1_000: return f"{v/1_000:.1f} mil".replace(".",",")
-    return f"{v:,.0f}".replace(",",".")
+def fmt_num(v):
+    if v is None or pd.isna(v):
+        return "—"
+    return f"{float(v):,.0f}".replace(",", ".")
 
-def signed(v):
-    if v is None or pd.isna(v): return "—"
-    return f"{float(v):+,.0f}".replace(",",".")
+def fmt_pct(v):
+    if v is None or pd.isna(v):
+        return "—"
+    return f"{100*float(v):.1f}%".replace(".", ",")
 
-def card(label,value,sub=""):
-    st.markdown(f'<div class="card"><div class="lab">{label}</div><div class="val">{value}</div><div class="sub">{sub}</div></div>',unsafe_allow_html=True)
+def kpi(title, value, detail):
+    st.markdown('<div class="kpi"><div class="name">'+esc(title)+'</div><div class="number">'+esc(value)+'</div><div class="detail">'+esc(detail)+'</div></div>', unsafe_allow_html=True)
 
-def layout(fig,h=350,legend=True):
-    fig.update_layout(paper_bgcolor="#101010",plot_bgcolor="#101010",font=dict(color="#9ca3af",size=12),height=h,
-                      margin=dict(l=18,r=18,t=22,b=36),
-                      legend=dict(orientation="h",y=-.22,x=0) if legend else dict(visible=False),
-                      hoverlabel=dict(bgcolor="#171717",bordercolor="#2a2a2a",font=dict(color="#fff")))
-    fig.update_xaxes(gridcolor="#202020",zerolinecolor="#202020")
-    fig.update_yaxes(gridcolor="#202020",zerolinecolor="#202020")
+def panel_title(title, detail=""):
+    st.markdown('<div class="panel"><h3>'+esc(title)+'</h3><p>'+esc(detail)+'</p>', unsafe_allow_html=True)
+
+def fig_style(fig, height=320):
+    fig.update_layout(height=height, margin=dict(l=8,r=8,t=16,b=28),
+        paper_bgcolor="white",plot_bgcolor="white",
+        font=dict(family="Inter",color="#61748b",size=11),
+        legend=dict(orientation="h",y=-.24,x=0),
+        hovermode="x unified")
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(gridcolor="#edf1f6",zeroline=False)
     return fig
 
-st.markdown('<div class="hero-k">TCC · ETAPA 2 · FORECASTING</div><div class="hero-t">COM O QUE EU SABIA NAQUELE MOMENTO,<br>QUAL MODELO EU TERIA ESCOLHIDO?</div><div class="hero-s">Cada fechamento é reconstruído sem usar informação futura. Entra um novo realizado, os erros conhecidos são atualizados, os modelos são comparados novamente e a previsão é refeita.</div><div class="sep"></div>',unsafe_allow_html=True)
-
-DEFAULT=Path(__file__).with_name("Base de Dados - PUC (2).xlsx")
+DEFAULT = Path(__file__).with_name("Base de Dados - PUC (2).xlsx")
 with st.sidebar:
-    st.header("Base de dados")
-    up=st.file_uploader("Suba a base Excel",type=["xlsx"])
-    st.caption("Dashboard exclusivo do SKU L. A base precisa conter as abas Base, BOM e L.")
-source=up if up is not None else (DEFAULT if DEFAULT.exists() else None)
-if source is None:
-    st.markdown('<div class="panel"><b>Envie a base Excel no menu lateral.</b><br><span style="color:#9ca3af">Assim que o arquivo for carregado, o dashboard monta automaticamente toda a Etapa 2.</span></div>',unsafe_allow_html=True)
-    st.stop()
-
-try:
-    xls=pd.ExcelFile(source)
-    base=read_base_table(xls); bom=read_bom(xls)
-    sheets={str(s).strip().upper() for s in xls.sheet_names}
-except Exception as e:
-    st.error("Não foi possível abrir a base."); st.code(str(e)); st.stop()
-
-product="L"
-if product not in sheets:
-    st.error("A base enviada não contém a aba do SKU L.")
-    st.stop()
-st.markdown('<div class="panel"><div class="lab">SKU analisado</div><div class="val">PRODUTO L</div><div class="sub">Dashboard exclusivo da Etapa 2 para o SKU L.</div></div>',unsafe_allow_html=True)
-try:
-    matrix=parse_pv_sheet(xls,product)
-    realized=realized_from_matrix(matrix)
-    audit=build_audit(matrix,realized,FORECAST_H)
-except Exception as e:
-    st.error(f"Não consegui preparar a Etapa 2 para o produto {product}."); st.code(str(e)); st.stop()
-
-meta=product_meta(base,bom,product)
-critical=critical_window_months(meta)
-closures=list(matrix.index)
-key=f"closure_{product}"
-if key not in st.session_state or st.session_state[key] not in closures:
-    st.session_state[key]=closures[min(3,len(closures)-1)]
-closure=st.session_state[key]
-known=realized[realized.index<closure]
-decision=choose_model(audit,closure)
-
-st.markdown('<div class="section">Produto e maturidade</div>',unsafe_allow_html=True)
-c=st.columns(6)
-with c[0]: card("Origem",meta["origem"])
-with c[1]:
-    hist_range=f"{plabel(known.index.min())} a {plabel(known.index.max())}" if len(known) else "sem realizado"
-    card("Histórico disponível",f"{len(known)} meses realizados",hist_range)
-with c[2]: card("Lead time",f'{float(meta["lt_weeks"]):.0f} sem' if pd.notna(meta["lt_weeks"]) else "—")
-with c[3]: card("Cobertura target",f'{float(meta["cobertura"]):.0f} dias' if pd.notna(meta["cobertura"]) else "—")
-with c[4]: card("Janela crítica",f"{critical} meses" if critical else "—","LT + cobertura + 1 mês")
-with c[5]: card("Último realizado",plabel(realized.index.max()),short(realized.iloc[-1]))
-
-st.markdown('<div class="section">Linha do tempo — fechamento mensal</div>',unsafe_allow_html=True)
-l,mid,r=st.columns([1.25,8.5,1.25])
-with l:
-    if st.button("← MÊS ANTERIOR",use_container_width=True,disabled=closure==closures[0]):
-        st.session_state[key]=closures[max(0,closures.index(closure)-1)]; st.rerun()
-with r:
-    if st.button("PRÓXIMO MÊS →",use_container_width=True,disabled=closure==closures[-1]):
-        st.session_state[key]=closures[min(len(closures)-1,closures.index(closure)+1)]; st.rerun()
-with mid:
-    cc=st.columns(len(closures))
-    for i,m in enumerate(closures):
-        with cc[i]:
-            if st.button(plabel(m),key=f"{product}_{m}",type="primary" if m==closure else "secondary",use_container_width=True):
-                st.session_state[key]=m; st.rerun()
-
-st.markdown(f'<div class="panel"><b>FECHAMENTO / VERSÃO: {plabel(closure)}</b><br><span style="color:#9ca3af">Histórico disponível neste momento: {len(known)} meses realizados. O realizado do próprio mês ainda não é conhecido nesta versão; ele aparece somente na versão seguinte.</span></div>',unsafe_allow_html=True)
-
-official_same_month = matrix.loc[closure, closure] if closure in matrix.index and closure in matrix.columns else np.nan
-if pd.notna(official_same_month):
-    st.caption(f"Previsão oficial L'Oréal feita no próprio mês ({plabel(closure)}): {short(official_same_month)} un. — este valor é previsão, não realizado.")
-
-st.markdown('<div class="section">1 · O que eu sabia neste mês?</div>',unsafe_allow_html=True)
-future=realized[realized.index>=closure]
-fig=go.Figure()
-fig.add_trace(go.Scatter(x=[p.to_timestamp() for p in known.index],y=known.values,mode="lines+markers",name="Realizado conhecido",line=dict(color="#f4c21f",width=3)))
-if len(future):
-    fig.add_trace(go.Scatter(x=[p.to_timestamp() for p in future.index],y=future.values,mode="lines+markers",name="Futuro ainda desconhecido",line=dict(color="#4b5563",width=2,dash="dot"),opacity=.65))
-fig.add_vline(x=closure.to_timestamp(),line_dash="dash",line_color="#6b7280")
-fig.update_yaxes(title="Demanda")
-st.plotly_chart(layout(fig,330),use_container_width=True)
-
-st.markdown('<div class="section">2 · Modelos calculáveis e comparáveis naquele momento</div>',unsafe_allow_html=True)
-avail=[m for m in MODELS if model_available(m,len(known))]
-unavail=[m for m in MODELS if not model_available(m,len(known))]
-metric_n={r.modelo:int(r.n) for _,r in decision["metrics"].iterrows()} if not decision["metrics"].empty else {}
-cols=st.columns(len(avail)+1)
-req={"Naive":"1 mês","MM2":"2 meses","MM3":"3 meses","SES":"2 meses","Holt":"3 meses"}
-for col,m in zip(cols[:-1],avail):
-    with col:
-        ncomp=metric_n.get(m,0)
-        status=f"COMPARÁVEL · n={ncomp}" if ncomp>0 else "AINDA NÃO COMPARÁVEL"
-        st.markdown(f'<div class="card"><div class="lab">{m}</div><div class="val" style="font-size:17px">CALCULÁVEL</div><div class="sub">mínimo: {req[m]}<br>{status}</div><span class="badge">{"avaliação disponível" if ncomp>0 else "avaliação limitada"}</span></div>',unsafe_allow_html=True)
-with cols[-1]:
-    bench_n=len(evaluated_until(audit,closure,"L'Oréal oficial",3))
-    st.markdown(f'<div class="card"><div class="lab">L’Oréal oficial</div><div class="val" style="font-size:17px">BENCHMARK</div><div class="sub">previsão oficial<br>erros conhecidos: n={bench_n}</div><span class="badge">benchmark</span></div>',unsafe_allow_html=True)
-if unavail: st.caption("Ainda não calculáveis por falta de histórico: "+", ".join(unavail)+".")
-
-st.markdown('<div class="section">3 · Menor MAE neste fechamento</div>',unsafe_allow_html=True)
-if decision["model"] is None:
-    st.markdown(f'<div class="choice bad"><div class="k">MODELO COM MENOR MAE NESTE FECHAMENTO</div><div class="m">AINDA NÃO HÁ HISTÓRICO SUFICIENTE PARA COMPARAÇÃO</div><div class="txt">{decision["message"]} O dashboard não força um vencedor com apenas uma observação isolada.</div></div>',unsafe_allow_html=True)
-else:
-    note=f'<div class="note">{decision.get("note","")}</div>' if decision.get("note") else ""
-    st.markdown(f'<div class="choice"><div class="k">MODELO COM MENOR MAE NESTE FECHAMENTO</div><div class="m">{decision["model"]}</div><div class="txt">{decision["message"]}</div>{note}</div>',unsafe_allow_html=True)
-    if pd.notna(decision.get("gap_abs",np.nan)):
-        st.caption(f'Diferença absoluta para o segundo menor MAE: {short(decision["gap_abs"])} un. Este valor é mostrado para transparência; não existe regra automática de troca por 5%, 10% ou outro limiar arbitrário.')
-
-idx=closures.index(closure)
-if idx>0:
-    prev=closures[idx-1]
-    pdx=choose_model(audit,prev)
-    prevm=pdx["model"] or "sem escolha"
-    curm=decision["model"] or "sem escolha"
-    curerr=evaluated_until(audit,closure,decision["model"],1) if decision["model"] else pd.DataFrame()
-    bias=curerr.erro.mean() if len(curerr) else np.nan
-    f1=forecast_model(decision["model"],known.values,1) if decision["model"] else None
-
-    phrase=(
-        f'O modelo mudou de <b>{prevm}</b> para <b>{curm}</b>.'
-        if prevm!=curm
-        else f'<b>{curm}</b> continua sendo o modelo selecionado.'
-    )
-
-    prev_realizados=realized.index[realized.index<closure]
-    if len(prev_realizados)>0:
-        newly_known=prev_realizados.max()
-        realized_val=realized.get(newly_known,np.nan)
-        new_txt=f"{plabel(newly_known)}: {short(realized_val)} un." if pd.notna(realized_val) else f"{plabel(newly_known)}: sem realizado"
+    st.markdown("### SMART LAUNCH")
+    st.caption("L'Oréal · Supply Chain Intelligence")
+    st.divider()
+    st.subheader("1 · Carregar planilha")
+    upload = st.file_uploader("Arquivo Excel (.xlsx)", type=["xlsx"])
+    if upload:
+        st.success("Planilha carregada nesta sessão")
+        source = upload
+    elif DEFAULT.exists():
+        source = DEFAULT
+        st.caption("Usando base de demonstração do repositório. Envie outra planilha para substituir.")
     else:
-        new_txt="nenhum novo realizado"
+        source = None
+        st.caption("Envie a planilha de produtos para começar.")
 
-    st.markdown(
-        f'<div class="changed"><b>O QUE MUDOU DESDE O ÚLTIMO FECHAMENTO?</b>'
-        f'<br><small>Entrou o realizado de {new_txt} · {phrase}'
-        f'<br>MAE anterior: {short(pdx.get("mae",np.nan))}'
-        f' · MAE atual: {short(decision.get("mae",np.nan))}'
-        f' · Bias atual: {signed(bias)}'
-        f' · Nova previsão M-1: {short(f1[0]) if f1 is not None else "—"}'
-        f'</small></div>',
-        unsafe_allow_html=True
-    )
+if source is None:
+    st.markdown('<div class="kicker">SUPPLY CHAIN INTELLIGENCE</div><div class="heading">Launch Decision Center</div><div class="subtitle">Envie uma planilha Excel usando o menu lateral.</div>',unsafe_allow_html=True)
+    st.info("O painel identifica automaticamente as abas de produtos e permite alternar entre elas sem limite fixo de três SKUs.")
+    st.stop()
 
-st.markdown('<div class="section">4 · Como o modelo foi escolhido?</div>',unsafe_allow_html=True)
-metrics=decision["metrics"]
-if metrics.empty:
-    st.info("Ainda não existem pelo menos dois modelos com erros realizados suficientes e compatíveis para uma comparação justa.")
+try:
+    xls = pd.ExcelFile(source)
+    base = read_base_table(xls) if "Base" in xls.sheet_names else pd.DataFrame()
+    bom = read_bom(xls) if "BOM" in xls.sheet_names else pd.DataFrame()
+    excluded = {"BASE", "BOM", "README", "INSTRUCOES", "INSTRUÇÕES", "PARAMETROS", "PARÂMETROS"}
+    candidates = [s for s in xls.sheet_names if s.strip().upper() not in excluded]
+    products = {}
+    problems = {}
+    for sheet in candidates:
+        try:
+            m = parse_pv_sheet(xls,sheet)
+            if m.shape[0] and m.shape[1]:
+                products[sheet]=m
+        except Exception as error:
+            problems[sheet]=str(error)
+except Exception as error:
+    st.error("A planilha não pôde ser lida: "+str(error))
+    st.stop()
+
+if not products:
+    st.error("Não foram encontradas abas com uma matriz de previsão mensal válida.")
+    with st.expander("Diagnóstico da planilha"):
+        st.write(problems)
+    st.stop()
+
+with st.sidebar:
+    st.divider()
+    st.subheader("2 · Selecionar produto")
+    product = st.selectbox("Produto / SKU", list(products.keys()))
+    st.caption(str(len(products))+" produtos reconhecidos automaticamente.")
+    st.subheader("3 · Selecionar fechamento")
+    matrix = products[product]
+    closures = list(matrix.index)
+    closure = st.selectbox("Versão do planejamento",closures,index=len(closures)-1,format_func=plabel)
+    st.divider()
+    st.caption("Indicadores do painel correspondem apenas ao produto e fechamento selecionados.")
+    with st.expander("Qualidade da importação"):
+        st.write("Abas reconhecidas:", len(products))
+        st.write("Abas não reconhecidas:", len(problems))
+        if problems: st.json(problems)
+
+meta = product_meta(base,bom,product)
+realized = realized_from_matrix(matrix)
+known = realized[realized.index < closure]
+audit = build_audit(matrix,realized,14)
+decision = choose_model(audit,closure)
+best = decision.get("model")
+official_future = matrix.loc[closure]
+official_future = official_future[official_future.index > closure].dropna().astype(float)
+target_periods = [p for p in matrix.columns if p > closure]
+horizon = min(12,len(target_periods))
+future = target_periods[:horizon]
+
+if best and len(known):
+    selected = forecast_model(best,known.values,horizon)
+elif len(known):
+    selected = forecast_model("Naive",known.values,horizon)
 else:
-    show=metrics.sort_values("MAE").copy()
-    colors=["#f4c21f" if m==decision["model"] else "#4b5563" for m in show.modelo]
-    fig=go.Figure(go.Bar(x=show.MAE,y=show.modelo,orientation="h",marker_color=colors,
-                         customdata=np.stack([show.Bias,show.n],axis=-1),
-                         hovertemplate="MAE: %{x:,.0f}<br>Bias: %{customdata[0]:+,.0f}<br>n: %{customdata[1]:.0f}<extra></extra>"))
-    fig.update_xaxes(title="MAE em observações compatíveis · menor = melhor"); fig.update_yaxes(categoryorder="total descending")
-    st.plotly_chart(layout(fig,315,False),use_container_width=True)
-    table=show[["modelo","MAE","Bias","n"]].rename(columns={"modelo":"Modelo","Bias":"Bias (realizado - previsto)"})
-    st.dataframe(table,use_container_width=True,hide_index=True)
-    st.caption("MAE é o critério principal. Bias, estabilidade entre horizontes e n são diagnósticos. O dashboard não usa score ponderado nem regra arbitrária de troca por 5% ou 10%.")
+    selected = None
+used_model = best or ("Naive (provisório)" if selected is not None else "Sem modelo")
 
-    ev=evaluated_until(audit,closure,max_h=3)
-    comp_models=list(show.modelo)
-    keysets=[]
-    for m in comp_models:
-        s=ev[ev.modelo.eq(m)]
-        keysets.append(set(zip(s.origem_previsao,s.mes_alvo,s.horizonte)))
-    common_keys=set.intersection(*keysets) if keysets else set()
-    used=ev[ev.modelo.eq(decision["model"])].copy()
-    if common_keys:
-        used=used[[tuple(x) in common_keys for x in zip(used.origem_previsao,used.mes_alvo,used.horizonte)]]
-    used=used.sort_values(["origem_previsao","horizonte"])
-    with st.expander(f'Ver os {len(used)} erros usados nesta decisão'):
-        if len(used):
-            t=used[["origem_previsao","mes_alvo","horizonte","previsto","realizado","erro"]].copy()
-            t["origem_previsao"]=t["origem_previsao"].map(plabel)
-            t["mes_alvo"]=t["mes_alvo"].map(plabel)
-            t=t.rename(columns={"origem_previsao":"Origem","mes_alvo":"Mês previsto","horizonte":"Horizonte","previsto":"Previsto","realizado":"Realizado","erro":"Erro"})
-            st.dataframe(t,use_container_width=True,hide_index=True)
-        else:
-            st.info("Ainda não há erros comparáveis para abrir.")
+st.markdown('<div class="kicker">SUPPLY CHAIN INTELLIGENCE</div><div class="heading">Launch Decision Center</div><div class="subtitle">Antecipação de risco e suporte à decisão de abastecimento · '+esc(product)+' · '+esc(plabel(closure))+'</div>',unsafe_allow_html=True)
 
-st.markdown('<div class="section">5 · Erros M-1 conhecidos do modelo selecionado até este fechamento</div>',unsafe_allow_html=True)
-if decision["model"]:
-    err=evaluated_until(audit,closure,decision["model"],1).sort_values("mes_alvo")
-    if len(err):
-        fig=go.Figure(go.Bar(x=[p.to_timestamp() for p in err.mes_alvo],y=err.erro,marker_color=["#45c49b" if e>=0 else "#ef6666" for e in err.erro],hovertemplate="Erro: %{y:+,.0f}<extra></extra>"))
-        fig.add_hline(y=0,line_color="#777",line_width=1); fig.update_yaxes(title="Erro = realizado - previsão")
-        st.plotly_chart(layout(fig,290,False),use_container_width=True)
-        c=st.columns(3)
-        with c[0]: card("Bias acumulado",signed(err.erro.mean()),"negativo = previsão acima do realizado")
-        with c[1]: card("Desvio-padrão",short(err.erro.std(ddof=1)) if len(err)>1 else "—","dos resíduos M-1")
-        with c[2]: card("Resíduos disponíveis",str(len(err)),"rolling M-1")
-        st.caption("Erro negativo = previsão acima do realizado. Erro positivo = previsão abaixo do realizado.")
-    else: st.info("O modelo pode ser calculado, mas ainda não existe erro M-1 realizado para medi-lo.")
-else: st.info("Os resíduos aparecerão quando houver histórico suficiente para selecionar um modelo.")
+if best:
+    htitle = "Previsão selecionada: "+best
+    msg = "Seleção feita com erros históricos conhecidos até o fechamento selecionado. Avalie a divergência frente ao planejamento oficial antes de decidir sobre produção."
+else:
+    htitle = "Monitoramento em construção"
+    msg = "Não há histórico comparável suficiente para selecionar um modelo vencedor de forma validada neste fechamento. A projeção ingênua, quando disponível, é mostrada apenas como referência."
+st.markdown('<div class="hero"><div class="tag">SMART LAUNCH · RECOMENDAÇÃO</div><div class="big">'+esc(htitle)+'</div><div class="desc">'+esc(msg)+'</div></div>',unsafe_allow_html=True)
 
-st.markdown('<div class="section">6 · Como o modelo com menor MAE mudou com o tempo?</div>',unsafe_allow_html=True)
-mat=maturity_history(audit,realized,closures)
-fig=go.Figure(go.Scatter(x=[p.to_timestamp() for p in mat.fechamento],y=mat.modelo,mode="lines+markers+text",text=mat.modelo,textposition="top center",
-                         line=dict(color="#5b9cff",width=2),marker=dict(size=10,color="#f4c21f"),
-                         customdata=np.stack([mat.historico,mat.MAE.fillna(-1),mat.n],axis=-1),
-                         hovertemplate="Histórico: %{customdata[0]:.0f} meses<br>Modelo: %{y}<br>MAE: %{customdata[1]:,.0f}<br>n: %{customdata[2]:.0f}<extra></extra>"))
-fig.add_vline(x=closure.to_timestamp(),line_dash="dash",line_color="#6b7280")
-st.plotly_chart(layout(fig,330,False),use_container_width=True)
-st.caption("Maturidade = meses de histórico acumulados. Horizonte = quantos meses à frente tentamos prever. São conceitos diferentes.")
+st.markdown('<div class="sec">Resumo executivo</div>',unsafe_allow_html=True)
+cs = st.columns(5)
+with cs[0]: kpi("Produto selecionado",product,"SKU da aba da planilha")
+with cs[1]: kpi("Modelo de referência",used_model,"Validação rolante, quando possível")
+with cs[2]: kpi("Lead time",fmt_num(meta["lt_weeks"])+" sem","Da aba Base / BOM")
+with cs[3]: kpi("Cobertura alvo",fmt_num(meta["cobertura"])+" dias","Meta informada na base")
+with cs[4]: kpi("Realizados disponíveis",str(len(known)),"Antes do fechamento escolhido")
 
-st.markdown('<div class="section">7 · Comparação dos modelos ao longo do tempo</div>',unsafe_allow_html=True)
-hist=cumulative_history(audit,realized,closures)
-if len(hist):
-    fig=px.line(hist,x=hist.fechamento.dt.to_timestamp(),y="MAE",color="modelo",markers=True,labels={"x":"Fechamento","modelo":"Modelo"})
-    fig.add_vline(x=closure.to_timestamp(),line_dash="dash",line_color="#6b7280")
-    st.plotly_chart(layout(fig,380),use_container_width=True)
-else: st.info("O gráfico começa quando existem erros compatíveis suficientes.")
+a,b = st.columns([1.7,1])
+with a:
+    panel_title("Demand Forecast","Previsão oficial versus modelo selecionado · dados da planilha")
+    fig = go.Figure()
+    if len(known):
+        fig.add_trace(go.Scatter(x=[str(p) for p in known.index], y=known.values,
+            mode="lines+markers",name="Demanda realizada",line=dict(color="#173c5e",width=3)))
+    if len(official_future):
+        fig.add_trace(go.Scatter(x=[str(p) for p in official_future.index],
+            y=official_future.values,mode="lines+markers",name="Plano oficial",
+            line=dict(color="#e5a62d",width=2,dash="dash")))
+    if selected is not None:
+        fig.add_trace(go.Scatter(x=[str(p) for p in future],
+            y=selected,mode="lines+markers",name=used_model,
+            line=dict(color="#367df7",width=3)))
+    st.plotly_chart(fig_style(fig),use_container_width=True)
+    st.markdown("</div>",unsafe_allow_html=True)
+with b:
+    panel_title("Leitura do planejamento","Comparação das próximas demandas projetadas")
+    if selected is not None and future:
+        compare = pd.DataFrame({"Mês":[plabel(p) for p in future],
+                "Smart Launch":[float(v) for v in selected],
+                "Oficial":[float(official_future[p]) if p in official_future.index else np.nan for p in future]})
+        compare["Diferença"] = compare["Smart Launch"]-compare["Oficial"]
+        st.dataframe(compare.style.format({"Smart Launch":"{:,.0f}","Oficial":"{:,.0f}","Diferença":"{:+,.0f}"},na_rep="—"),
+            use_container_width=True,hide_index=True,height=330)
+    else:
+        st.info("Sem dados para comparação de projeções neste fechamento.")
+    st.markdown("</div>",unsafe_allow_html=True)
 
-st.markdown('<div class="section">8 · Desempenho por horizonte</div>',unsafe_allow_html=True)
-hm=horizon_metrics(audit,closure)
-if len(hm):
-    mae=hm.pivot(index="modelo",columns="horizonte",values="MAE").reindex(columns=["M-1","M-2","M-3"])
-    nn=hm.pivot(index="modelo",columns="horizonte",values="n").reindex(columns=["M-1","M-2","M-3"])
-    txt=mae.copy().astype(object)
-    for rr in txt.index:
-        for cc in txt.columns:
-            v=mae.loc[rr,cc]; n=nn.loc[rr,cc] if rr in nn.index and cc in nn.columns else np.nan
-            txt.loc[rr,cc]="—" if pd.isna(v) else f"{v:,.0f}<br>n={int(n)}"
-    fig=go.Figure(go.Heatmap(z=mae.values,x=mae.columns,y=mae.index,text=txt.values,texttemplate="%{text}",
-                             colorscale=[[0,"#173f38"],[.5,"#6b5a18"],[1,"#54262a"]],colorbar=dict(title="MAE"),
-                             hovertemplate="%{y} · %{x}<br>MAE: %{z:,.0f}<extra></extra>"))
-    st.plotly_chart(layout(fig,370,False),use_container_width=True)
-    st.caption("n = quantidade de previsões já comparáveis com o realizado. Em cada horizonte, os modelos usam meses-alvo compatíveis. n muito baixo = amostra insuficiente para comparação robusta.")
-else: st.info("Ainda não há realizado suficiente para avaliar M-1, M-2 ou M-3.")
+st.markdown('<div class="sec">Risk Monitor</div>',unsafe_allow_html=True)
+a,b = st.columns(2)
+with a:
+    panel_title("Monitor de excesso e ruptura","Não confundir divergência de previsão com probabilidade de excesso")
+    st.markdown('<div class="notice"><b>Aguardando dados de estoque e entradas planejadas.</b> A matriz PV informa previsões de demanda, mas não permite, sozinha, calcular cobertura futura, probabilidades Monte Carlo ou ruptura. Esses indicadores só devem ser habilitados quando suas variáveis operacionais forem fornecidas.</div>',unsafe_allow_html=True)
+    st.markdown("</div>",unsafe_allow_html=True)
+with b:
+    panel_title("Inventory Coverage Outlook","Cobertura futura comparada com o limite operacional")
+    st.info("Necessário: estoque inicial por SKU, recebimentos mensais, consumo projetado e política de cobertura.")
+    if pd.notna(meta["cobertura"]):
+        st.caption("Cobertura alvo cadastrada para "+product+": "+fmt_num(meta["cobertura"])+" dias.")
+    st.markdown("</div>",unsafe_allow_html=True)
 
-st.markdown('<div class="section">9 · Se estivéssemos neste mês, esta seria nossa previsão</div>',unsafe_allow_html=True)
-if decision["model"]:
-    pred=forecast_model(decision["model"],known.values,FORECAST_H)
-    fut=pd.period_range(closure+1,periods=FORECAST_H,freq="M")
-    fig=go.Figure()
-    fig.add_trace(go.Scatter(x=[p.to_timestamp() for p in known.index],y=known.values,mode="lines+markers",name="Histórico realizado",line=dict(color="#f4c21f",width=3)))
-    fig.add_trace(go.Scatter(x=[closure.to_timestamp()]+[p.to_timestamp() for p in fut],y=[known.iloc[-1]]+list(pred),mode="lines+markers",name=f"Previsão · {decision['model']}",line=dict(color="#5b9cff",width=3)))
-    if critical: fig.add_vrect(x0=closure.to_timestamp(),x1=(closure+critical).to_timestamp(how="end"),fillcolor="#ef6666",opacity=.08,line_width=0,annotation_text="janela crítica",annotation_position="top left")
-    fig.add_vrect(x0=closure.to_timestamp(),x1=fut[-1].to_timestamp(how="end"),fillcolor="#5b9cff",opacity=.035,line_width=0)
-    st.plotly_chart(layout(fig,390),use_container_width=True)
-    st.caption(f"O horizonte operacional mostrado é de {FORECAST_H} meses. Isso não significa que todos os horizontes longos estejam validados com a mesma robustez.")
-else: st.info("Sem comparação suficiente, o dashboard não transforma um modelo em vencedor. O Naive pode servir apenas como referência operacional inicial.")
+st.markdown('<div class="sec">Decision Simulator</div>',unsafe_allow_html=True)
+a,b = st.columns(2)
+with a:
+    panel_title("Lot Intervention Frontier","Avaliação do que ainda pode ser alterado com lead time")
+    st.info("Para identificar lotes ajustáveis, a planilha deve informar lotes programados, datas de compromisso e condições de cancelamento ou redução.")
+    st.markdown("</div>",unsafe_allow_html=True)
+with b:
+    panel_title("Recommended Alternatives","Comparação de impacto e viabilidade de ações")
+    st.info("Nenhuma redução ou cancelamento é recomendado sem simular o estoque e verificar os compromissos de fornecimento.")
+    st.markdown("</div>",unsafe_allow_html=True)
 
-st.markdown('<div class="section">10 · Saída da Etapa 2 para a Etapa 3</div>',unsafe_allow_html=True)
-if decision["model"]:
-    res=evaluated_until(audit,closure,decision["model"],1).sort_values("mes_alvo")
-    pred=forecast_model(decision["model"],known.values,FORECAST_H)
-    c=st.columns(6)
-    vals=[("Modelo selecionado",decision["model"],""),("Previsão M-1",short(pred[0]),"unidades"),("Resíduos",str(len(res)),"rolling M-1"),
-          ("Bias",signed(res.erro.mean()) if len(res) else "—","média dos resíduos"),("Desvio-padrão",short(res.erro.std(ddof=1)) if len(res)>1 else "—","dos resíduos"),
-          ("Janela crítica",f"{critical} meses" if critical else "—","LT + cobertura + 1")]
-    for col,(la,va,su) in zip(c,vals):
-        with col: card(la,va,su)
-    if len(res): st.caption(f"Período dos resíduos: {plabel(res.mes_alvo.min())} a {plabel(res.mes_alvo.max())}. Essas informações são a saída da Etapa 2 para a simulação estocástica da Etapa 3. Este dashboard não calcula estoque, excesso, gatilhos ou Monte Carlo.")
-else: st.info("A saída para a Etapa 3 só é consolidada quando existe uma seleção baseada em erros realizados.")
+st.markdown('<div class="sec">Why Smart Launch?</div>',unsafe_allow_html=True)
+a,b = st.columns([1.2,1])
+with a:
+    panel_title("Validação histórica dos modelos","Erros conhecidos no fechamento · sem uso de dados futuros")
+    ev = evaluated_until(audit,closure,max_h=3)
+    ev = ev[ev["realizado"].notna()].copy() if not ev.empty else ev
+    if not ev.empty:
+        ev["erro_abs"] = ev["erro"].abs()
+        report = ev.groupby("modelo",as_index=False).agg(MAE=("erro_abs","mean"),Avaliações=("erro_abs","size"))
+        report = report.sort_values("MAE")
+        fig=go.Figure(go.Bar(x=report["modelo"],y=report["MAE"],marker_color="#367df7"))
+        fig.update_layout(yaxis_title="Erro médio absoluto")
+        st.plotly_chart(fig_style(fig,275),use_container_width=True)
+        st.dataframe(report.style.format({"MAE":"{:,.0f}"}),hide_index=True,use_container_width=True)
+        st.caption("Comparação descritiva: modelos podem ter números distintos de previsões avaliadas. A seleção do modelo utiliza a rotina de comparação comum existente no código.")
+    else:
+        st.info("Ainda não existem resultados históricos suficientes neste fechamento.")
+    st.markdown("</div>",unsafe_allow_html=True)
+with b:
+    panel_title("Evidence Quality","O que os dados demonstram — e o que ainda não demonstram")
+    st.write("**Integridade temporal:** os realizados são conhecidos apenas na versão seguinte.")
+    st.write("**Rastreabilidade:** produto, versão, previsão e modelo ficam visíveis.")
+    st.write("**Precisão de alertas:** não avaliada com a base PV isolada.")
+    st.write("**Validação prospectiva:** pendente de novas observações.")
+    st.markdown("</div>",unsafe_allow_html=True)
 
-with st.expander("Regra de seleção e tabela de auditoria"):
-    st.markdown("""
-**Regra explícita**
-1. Cada origem usa somente realizados disponíveis até aquele fechamento.
-2. Naive usa o último realizado; MM2 os 2 anteriores; MM3 os 3 anteriores; SES e Holt são reajustados em cada origem.
-3. Um erro só entra depois que o realizado do mês-alvo existe.
-4. A seleção usa MAE em observações compatíveis entre os modelos elegíveis, nos horizontes M-1 a M-3.
-5. É preciso haver pelo menos 2 erros compatíveis e 2 modelos comparáveis. Caso contrário, não há vencedor.
-6. O dashboard não usa regra arbitrária de troca por 5%, 10% ou outro percentual. Ele mostra qual modelo tem o menor MAE naquele fechamento e sinaliza quando a amostra ainda é limitada.
-7. A previsão oficial L'Oréal é benchmark, não candidato automático à seleção.
-""")
-    view=audit[audit.origem_previsao<=closure].copy().sort_values(["origem_previsao","modelo","horizonte"])
-    view["fechamento"]=view.fechamento.map(plabel); view["origem_previsao"]=view.origem_previsao.map(plabel); view["mes_alvo"]=view.mes_alvo.map(plabel)
-    view=view[["fechamento","modelo","origem_previsao","horizonte","mes_alvo","previsto","realizado","erro"]]
-    st.dataframe(view,use_container_width=True,hide_index=True)
-    st.download_button("Baixar auditoria (.csv)",view.to_csv(index=False).encode("utf-8-sig"),file_name=f"auditoria_etapa2_{product}.csv",mime="text/csv")
-
-checks=validate_audit(audit,realized); ok=all(checks.values())
-st.markdown(f'<div class="panel"><b>Validação automática: <span style="color:{"#45c49b" if ok else "#ef6666"}">{"OK" if ok else "REVISAR"}</span></b><br><span style="color:#9ca3af">'+" · ".join([f"{k}: {'✓' if v else '✕'}" for k,v in checks.items()])+'</span></div>',unsafe_allow_html=True)
+st.caption("Smart Launch é um sistema de apoio à decisão. Projeções não equivalem a pedidos ou alterações automáticas no plano. O painel não inventa estoques, probabilidades de risco ou lotes de produção ausentes do arquivo.")
