@@ -5,7 +5,7 @@ import pandas as pd
 from smartlaunch_core import (
     month, parse_matrix, Matrices, forward_cover, simulate_inventory,
     metrics, critical_window, deadline, actionable_lots, compare_alternative,
-    analog_forecast, monte_carlo, benchmark_log_errors,
+    analog_forecast, monte_carlo, benchmark_log_errors, compare_reschedule,
 )
 
 def p(value):
@@ -62,6 +62,14 @@ class TestSmartLaunch(unittest.TestCase):
         altered=compare_alternative(base,50,receipts,d,2,-50,180,4)
         self.assertGreaterEqual(altered["lost_extra"],0)
         self.assertEqual(altered["change"],-50)
+
+    def test_reschedule_preserves_lot_quantity(self):
+        demand=np.tile(np.array([[12.,12.,12.]]),(1000,1))
+        receipts=np.array([20.,30.,10.])
+        baseline=metrics(80,receipts,demand,limit=180,window=3)
+        shifted=compare_reschedule(baseline,80,receipts,demand,1,2,180,3)
+        self.assertIsInstance(shifted["admissible"],bool)
+        self.assertTrue(np.isfinite(shifted["lost_extra"]))
 
     def test_simulation_reproducible(self):
         a=monte_carlo(np.array([10.,11.]),np.array([-2.,3.,1.]))
