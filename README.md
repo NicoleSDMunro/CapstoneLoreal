@@ -8,7 +8,7 @@ Install dependencies from requirements.txt and run:
 
     streamlit run app.py
 
-Upload a planning workbook from the sidebar, select SKU and planning version, and inspect the conditional forecast, risk and intervention assessment. The app is desktop-first.
+Upload a planning workbook from the sidebar, select SKU and planning version, and inspect the conditional forecast, risk and intervention assessment. The app is desktop-first. If 12 months are requested but the uploaded version contains only 6 planned months, analysis is limited to those 6 months and the app reports the shortened horizon.
 
 ## Excel input layouts
 
@@ -20,11 +20,11 @@ The app accepts three workbook layouts. All date columns can contain dates or Po
 
 Optional **Base** and **BOM** sheets supply lead time and target stock coverage. If required parameters are not discovered, the sidebar exposes editable values. For the three case-study products P1/P2/P3, default values are sourced from the dissertation and must be confirmed against the actual workbook. For new SKUs, example defaults are clearly marked.
 
-If PV is present without production or inventory, the forecast still works. Conditional stock risk and lot actions are deliberately unavailable until PP, PE or explicit manual scenario inputs are provided. An xlsx workbook with many product tabs is supported; there is no hard-coded three-product limit.
+If PV is present without production or inventory, the forecast still works. The sidebar's **Import diagnostics** section shows which blocks and closing values were found; missing values are not inferred from a later closing. Conditional stock risk and lot actions are deliberately unavailable until PP, PE or explicit manual scenario inputs are provided. An xlsx workbook with many product tabs is supported; there is no hard-coded three-product limit.
 
 ## Analysis and interpretation
 
-- **Preprocessing:** forecasts and realized sales are separated by planning-version origin; the value of month t is read from version t+1.
+- **Preprocessing:** forecasts and realized sales are separated by planning-version origin; the actual for month t is read from version t+1. A JUL/26 plan version is created after the June closing and forecasts July as its first month (h=1). July's opening stock is the June closing balance on the JUL/26 version, and lot action deadlines are checked as of June closing.
 - **Forecast:** MEA and MEA-P are implemented alongside official and traditional models. Early model ranking uses eligible rolling-origin errors and MAPE. A prelaunch projection without sufficient own-sales data is labelled provisional.
 - **Uncertainty:** 1,000 Normal(0,s) scenarios from known historical residuals, with an optional centered bootstrap. Where own errors are unavailable, the app may generate exploratory multiplicative scenarios from cross-benchmark log errors. The two approaches must not be equated.
 - **Inventory:** stock and lost sales are simulated using the closing balance and planned receipts; forward cover depletes successive future demands using a 30-day convention.
