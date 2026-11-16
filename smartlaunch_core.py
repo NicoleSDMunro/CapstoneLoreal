@@ -15,7 +15,8 @@ from forecasting import (MODELS, as_period, forecast_model,
                          realized_from_matrix, product_meta, read_base_table, read_bom)
 
 MONTHS = {"jan":1,"fev":2,"mar":3,"abr":4,"mai":5,"jun":6,"jul":7,
-          "ago":8,"set":9,"out":10,"nov":11,"dez":12}
+          "ago":8,"set":9,"out":10,"nov":11,"dez":12,
+          "feb":2,"apr":4,"may":5,"aug":8,"sep":9,"oct":10,"dec":12}
 
 def month(value):
     if isinstance(value, pd.Period):
@@ -29,6 +30,8 @@ def month(value):
         return result
     s=str(value).strip().lower()
     try:
+        if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}",s):
+            return pd.Period(pd.Timestamp(s),freq="M")
         if re.fullmatch(r"\d{4}[-/]\d{1,2}",s):
             return pd.Period(s.replace("/","-"),freq="M")
         if re.fullmatch(r"\d{1,2}[-/]\d{4}",s):
@@ -90,13 +93,13 @@ def detect_blocks(raw):
     """Detect explicit PV/PP/PE blocks on a per-product worksheet."""
     found={}
     markers={"PV":("pv","plano de vendas","previsao de vendas","sales plan"),
-             "PP":("pp","plano de producao","producao planejada","production plan"),
-             "PE":("pe","plano de estoque","estoque projetado","inventory plan")}
+             "PP":("pp","plano de producao","producao planejada","production plan","producao"),
+             "PE":("pe","plano de estoque","estoque projetado","inventory plan","estoque")}
     starts=[]
     for i in range(len(raw)):
         snippets=[normalize(x) for x in raw.iloc[i,:min(5,raw.shape[1])].tolist() if pd.notna(x)]
         for kind,values in markers.items():
-            if any(s in values for s in snippets):
+            if any(s==v or s.startswith(v+" ") or s.startswith(v+"(") for s in snippets for v in values):
                 starts.append((i,kind))
                 break
     for idx,(start,kind) in enumerate(starts):
