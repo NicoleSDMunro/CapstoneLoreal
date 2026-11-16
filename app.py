@@ -15,7 +15,7 @@ from smartlaunch_core import (read_triangle, available_analogs, realized,
     planned_launch, rolling_audit, rank_models, candidate, forecast_path,
     forecast_residuals, monte_carlo, production_plan, opening_stock,
     metrics, critical_window, actionable_lots, compare_alternative,
-    benchmark_log_errors, scenarios_from_benchmarks)
+    benchmark_log_errors, scenarios_from_benchmarks, compare_reschedule)
 
 st.set_page_config(page_title="Smart Launch | Decision Center",
                    page_icon="📊",layout="wide",initial_sidebar_state="expanded")
@@ -366,17 +366,32 @@ with a:
             unsafe_allow_html=True)
         for amount in [-100,-75,-50,-35,-30,-25,-10,-5,0,5,25,50,100]:
             assessment=compare_alternative(calc,initial,receipts,scenarios,i,amount,limit,window)
-            alternatives.append({"Lot":plabel(p),"Adjustment %":amount,
+            alternatives.append({"Lot":plabel(p),"Action":"Volume adjustment","Adjustment %":amount,
                 "Excess avoided":assessment["excess_avoided"],"Additional lost sales":assessment["lost_extra"],
                 "Fill rate %":assessment["fill"]*100,"Excess risk %":assessment["excess_risk"]*100,
                 "Stockout risk %":assessment["stockout_risk"]*100,
                 "Status":"Admissible under current assumptions" if assessment["admissible"] else "Planner review required"})
+        for label,shift in [("Postpone one month",1),("Advance one month",-1)]:
+            new_index=i+shift
+            if 0<=new_index<len(future):
+                # Rescheduling is available only if the destination delivery month
+                # can still be reached under the configured supplier lead time.
+                eligible=actionable_lots(closure,[future[new_index]],
+                                        np.array([units],dtype=float),lead_weeks)
+                if eligible:
+                    assessment=compare_reschedule(calc,initial,receipts,scenarios,i,new_index,limit,window)
+                    alternatives.append({"Lot":plabel(p),"Action":label,"Adjustment %":0,
+                        "Excess avoided":assessment["excess_avoided"],
+                        "Additional lost sales":assessment["lost_extra"],
+                        "Fill rate %":assessment["fill"]*100,"Excess risk %":assessment["excess_risk"]*100,
+                        "Stockout risk %":assessment["stockout_risk"]*100,
+                        "Status":"Admissible under current assumptions" if assessment["admissible"] else "Planner review required"})
         plot=go.Figure()
         for label,color in [("Admissible under current assumptions","#278a67"),("Planner review required","#da9350")]:
             part=[row for row in alternatives if row["Status"]==label]
             plot.add_trace(go.Scatter(x=[r["Additional lost sales"] for r in part],
                   y=[r["Excess avoided"] for r in part],mode="markers+text",
-                  text=[f"{r['Adjustment %']:+.0f}%" for r in part],
+                  text=[f"{r['Adjustment %']:+.0f}%" if r["Action"]=="Volume adjustment" else r["Action"] for r in part],
                   textposition="top center",name=label,marker=dict(size=10,color=color)))
         plot.update_layout(xaxis_title="Additional lost sales (units)",yaxis_title="Excess avoided (units)")
         st.plotly_chart(nice_plot(plot,305),use_container_width=True)
@@ -390,7 +405,7 @@ with b:
         options=pd.DataFrame(alternatives)
         sort_filter=st.selectbox("SHOW ALTERNATIVES",["All","Admissible under current assumptions","Planner review required"])
         if sort_filter!="All": options=options[options["Status"]==sort_filter]
-        st.dataframe(options[["Adjustment %","Excess avoided","Additional lost sales","Fill rate %","Status"]],
+        st.dataframe(options[["Action","Adjustment %","Excess avoided","Additional lost sales","Fill rate %","Status"]],
                      hide_index=True,use_container_width=True,height=380,
                      column_config={"Excess avoided":st.column_config.NumberColumn(format="%.0f"),
                                     "Additional lost sales":st.column_config.NumberColumn(format="%.0f"),
